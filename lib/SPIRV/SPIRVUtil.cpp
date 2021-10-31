@@ -1764,7 +1764,7 @@ bool lowerBuiltinVariableToCall(GlobalVariable *GV,
   if (!Func) {
     FunctionType *FT = FunctionType::get(ReturnTy, ArgTy, false);
     Func = Function::Create(FT, GlobalValue::ExternalLinkage, MangledName, M);
-    Func->setCallingConv(CallingConv::SPIR_FUNC);
+    Func->setCallingConv(CallingConv::FLOOR_FUNC);
     Func->addFnAttr(Attribute::NoUnwind);
     Func->addFnAttr(Attribute::ReadNone);
     Func->addFnAttr(Attribute::WillReturn);

@@ -785,7 +785,7 @@ SPIRVFunction *LLVMToSPIRVBase::transFunctionDecl(Function *F) {
       if (BM->isAllowedToUseVersion(VersionNumber::SPIRV_1_1) &&
           Attrs.hasParamAttr(ArgNo, Attribute::Dereferenceable))
         BA->addDecorate(DecorationMaxByteOffset,
-                        Attrs.hasParamAttr(ArgNo, Attribute::Dereferenceable)
+                        Attrs.getParamAttr(ArgNo, Attribute::Dereferenceable)
                             .getDereferenceableBytes());
       if (BufferLocation && I->getType()->isPointerTy()) {
         // Order of integer numbers in MD node follows the order of function
@@ -3813,7 +3813,7 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
   if (MangledName.startswith("floor.")) {
     if (MangledName.startswith("floor.composite_construct.")) {
       std::vector<SPIRVWord> Constituents;
-      for (const auto &elem : CI->arg_operands()) {
+      for (const auto &elem : CI->args()) {
         Constituents.emplace_back(transValue(elem, BB)->getId());
       }
       return BM->addCompositeConstructInst(transType(CI->getType()),
@@ -5168,8 +5168,7 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
                 llvm::Value *idx_list[]{
                     llvm::ConstantInt::get(llvm::Type::getInt32Ty(*Ctx), 0),
                 };
-                auto zero_gep =
-                    GetElementPtrInst::CreateInBounds(GV, idx_list, "", instr);
+                auto zero_gep = GetElementPtrInst::CreateInBounds(GV->getType()->getScalarType()->getPointerElementType(), GV, idx_list, "", instr);
                 zero_gep->setDebugLoc(instr->getDebugLoc());
 
                 // replace all uses in the instruction

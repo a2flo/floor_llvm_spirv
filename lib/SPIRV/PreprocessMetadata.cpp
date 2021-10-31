@@ -272,7 +272,7 @@ void PreprocessMetadataBase::visit(Module *M) {
 
     // !{void (i32 addrspace(1)*)* @kernel, i32 ip_interface, i32 interface}
     if (MDNode *Interface =
-            Kernel.getMetadata(kSPIR2MD::IntelFPGAIPInterface)) {
+            Func.getMetadata(kSPIR2MD::IntelFPGAIPInterface)) {
       std::set<std::string> InterfaceStrSet;
       // Default mode is 'csr' aka !ip_interface !N
       //                           !N = !{!”csr”}
@@ -291,7 +291,7 @@ void PreprocessMetadataBase::visit(Module *M) {
         if (InterfaceStrSet.find("stall_free_return") != InterfaceStrSet.end())
           InterfaceMode = 1;
         EM.addOp()
-            .add(&Kernel)
+            .add(&Func)
             .add(spv::internal::ExecutionModeStreamingInterfaceINTEL)
             .add(InterfaceMode)
             .done();
