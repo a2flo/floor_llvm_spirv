@@ -138,6 +138,14 @@ inline bool isAccessChainOpCode(Op OpCode) {
   return OpCode == OpAccessChain || OpCode == OpInBoundsAccessChain;
 }
 
+inline bool isImageOpCode(Op OpCode) {
+  return (((unsigned)OpCode >= OpSampledImage &&
+           (unsigned)OpCode <= OpImageQuerySamples) ||
+          ((unsigned)OpCode >= OpImageSparseSampleImplicitLod &&
+           (unsigned)OpCode <= OpImageSparseTexelsResident) ||
+          OpCode == OpImageTexelPointer || OpCode == OpImageSparseRead);
+}
+
 inline bool hasExecScope(Op OpCode) {
   unsigned OC = OpCode;
   return (OpGroupWaitEvents <= OC && OC <= OpGroupSMax) ||

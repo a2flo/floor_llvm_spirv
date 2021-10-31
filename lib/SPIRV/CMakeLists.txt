@@ -1,6 +1,7 @@
 add_llvm_library(LLVMSPIRVLib
   LLVMSPIRVOpts.cpp
   LLVMToSPIRVDbgTran.cpp
+  LLVMToSPIRVTransformations.cpp
   Mangler/FunctionDescriptor.cpp
   Mangler/Mangler.cpp
   Mangler/ManglingUtils.cpp
@@ -10,6 +11,7 @@ add_llvm_library(LLVMSPIRVLib
   OCLUtil.cpp
   VectorComputeUtil.cpp
   SPIRVLowerBitCastToNonStandardType.cpp
+  SPIRVContainerWriterPass.cpp
   SPIRVLowerBool.cpp
   SPIRVLowerConstExpr.cpp
   SPIRVLowerMemmove.cpp

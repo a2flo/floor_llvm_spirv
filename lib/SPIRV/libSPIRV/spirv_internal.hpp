@@ -47,6 +47,7 @@ enum InternalOp {
   IOpJointMatrixMadINTEL = 6122,
   IOpArithmeticFenceINTEL = 6145,
   IOpPrev = OpMax - 2,
+  IOpUndefValueInternal,
   IOpForward
 };
 
@@ -114,6 +115,7 @@ _SPIRV_OP(BuiltIn, MaxHWThreadIDPerSubDeviceINTEL)
 #undef _SPIRV_OP
 
 constexpr Op OpForward = static_cast<Op>(IOpForward);
+constexpr Op OpUndefValueInternal = static_cast<Op>(IOpUndefValueInternal);
 constexpr Op OpAliasDomainDeclINTEL = static_cast<Op>(IOpAliasDomainDeclINTEL);
 constexpr Op OpAliasScopeDeclINTEL = static_cast<Op>(IOpAliasScopeDeclINTEL);
 constexpr Op OpAliasScopeListDeclINTEL =

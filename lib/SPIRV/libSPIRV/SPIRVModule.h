@@ -65,6 +65,7 @@ class SPIRVFunction;
 class SPIRVInstruction;
 class SPIRVType;
 class SPIRVTypeArray;
+class SPIRVTypeRuntimeArray;
 class SPIRVTypeBool;
 class SPIRVTypeFloat;
 class SPIRVTypeFunction;
@@ -135,6 +136,8 @@ public:
   virtual SPIRVExtInstSetKind getBuiltinSet(SPIRVId) const = 0;
   virtual SPIRVFunction *getEntryPoint(SPIRVExecutionModelKind,
                                        unsigned) const = 0;
+  virtual const std::map<SPIRVId, std::vector<SPIRVVariable *>> &
+  getEntryPointIO() const = 0;
   virtual std::set<std::string> &getExtension() = 0;
   virtual SPIRVFunction *getFunction(unsigned) const = 0;
   virtual SPIRVVariable *getVariable(unsigned) const = 0;
@@ -154,7 +157,9 @@ public:
   virtual SPIRVType *getValueType(SPIRVId TheId) const = 0;
   virtual std::vector<SPIRVType *>
   getValueTypes(const std::vector<SPIRVId> &) const = 0;
-  virtual SPIRVConstant *getLiteralAsConstant(unsigned Literal) = 0;
+  virtual SPIRVConstant *getLiteralAsConstant(unsigned Literal, bool is_signed) = 0;
+  virtual SPIRVConstant *getLiteralAsConstant(float Literal) = 0;
+  virtual SPIRVConstant *getLiteralAsConstant(double Literal) = 0;
   virtual bool isEntryPoint(SPIRVExecutionModelKind, SPIRVId) const = 0;
   virtual unsigned short getGeneratorId() const = 0;
   virtual unsigned short getGeneratorVer() const = 0;
@@ -213,6 +218,7 @@ public:
   virtual SPIRVGroupDecorateGeneric *
   addGroupDecorateGeneric(SPIRVGroupDecorateGeneric *GDec) = 0;
   virtual void addEntryPoint(SPIRVExecutionModelKind, SPIRVId) = 0;
+  virtual void addEntryPointIO(SPIRVId EntryPoint, SPIRVVariable *var) = 0;
   virtual SPIRVForward *addForward(SPIRVType *Ty) = 0;
   virtual SPIRVForward *addForward(SPIRVId, SPIRVType *Ty) = 0;
   virtual SPIRVFunction *addFunction(SPIRVFunction *) = 0;
@@ -223,6 +229,7 @@ public:
 
   // Type creation functions
   virtual SPIRVTypeArray *addArrayType(SPIRVType *, SPIRVConstant *) = 0;
+  virtual SPIRVTypeRuntimeArray *addRuntimeArrayType(SPIRVType *) = 0;
   virtual SPIRVTypeBool *addBoolType() = 0;
   virtual SPIRVTypeFloat *addFloatType(unsigned) = 0;
   virtual SPIRVTypeFunction *
@@ -235,7 +242,7 @@ public:
   virtual SPIRVTypeSampler *addSamplerType() = 0;
   virtual SPIRVTypePipeStorage *addPipeStorageType() = 0;
   virtual SPIRVTypeSampledImage *addSampledImageType(SPIRVTypeImage *T) = 0;
-  virtual SPIRVTypeInt *addIntegerType(unsigned) = 0;
+  virtual SPIRVTypeInt *addIntegerType(unsigned, bool is_signed) = 0;
   virtual SPIRVTypeOpaque *addOpaqueType(const std::string &) = 0;
   virtual SPIRVTypePointer *addPointerType(SPIRVStorageClassKind,
                                            SPIRVType *) = 0;
@@ -278,6 +285,7 @@ public:
   virtual SPIRVValue *addIntegerConstant(SPIRVTypeInt *, uint64_t) = 0;
   virtual SPIRVValue *addNullConstant(SPIRVType *) = 0;
   virtual SPIRVValue *addUndef(SPIRVType *TheType) = 0;
+  virtual SPIRVValue *addUndefInst(SPIRVType *TheType, SPIRVBasicBlock *) = 0;
   virtual SPIRVValue *addSamplerConstant(SPIRVType *TheType, SPIRVWord AddrMode,
                                          SPIRVWord ParametricMode,
                                          SPIRVWord FilterMode) = 0;
@@ -286,10 +294,20 @@ public:
                                              SPIRVWord PacketAlign,
                                              SPIRVWord Capacity) = 0;
 
+  // Specialization constants creation functions
+  virtual SPIRVValue *addSpecDoubleConstant(SPIRVTypeFloat *, double) = 0;
+  virtual SPIRVValue *addSpecFloatConstant(SPIRVTypeFloat *, float) = 0;
+  virtual SPIRVValue *addSpecIntegerConstant(SPIRVTypeInt *, uint64_t) = 0;
+  virtual SPIRVValue *
+  addSpecCompositeConstant(SPIRVType *, const std::vector<SPIRVValue *> &) = 0;
+
   // Instruction creation functions
   virtual SPIRVInstruction *addPtrAccessChainInst(SPIRVType *, SPIRVValue *,
                                                   std::vector<SPIRVValue *>,
                                                   SPIRVBasicBlock *, bool) = 0;
+  virtual SPIRVInstruction *addAccessChainInst(SPIRVType *, SPIRVValue *,
+                                               std::vector<SPIRVValue *>,
+                                               SPIRVBasicBlock *, bool) = 0;
   virtual SPIRVInstruction *
   addAsyncGroupCopy(SPIRVValue *Scope, SPIRVValue *Dest, SPIRVValue *Src,
                     SPIRVValue *NumElems, SPIRVValue *Stride, SPIRVValue *Event,
@@ -466,6 +484,17 @@ public:
                                              SPIRVValue *Value,
                                              SPIRVValue *ExpectedValue,
                                              SPIRVBasicBlock *BB) = 0;
+
+  virtual SPIRVInstruction *addBitCountInst(SPIRVType *ret_type, SPIRVValue *p,
+                                            SPIRVBasicBlock *BB) = 0;
+
+  // GLSL/shader functions
+  virtual SPIRVInstruction *addKillInst(SPIRVBasicBlock *) = 0;
+  virtual SPIRVInstruction *addDerivativeInst(Op op, SPIRVValue *p,
+                                              SPIRVBasicBlock *BB) = 0;
+  virtual SPIRVInstruction *addBitReverseInst(SPIRVType *ret_type,
+                                              SPIRVValue *p,
+                                              SPIRVBasicBlock *BB) = 0;
 
   virtual SPIRVId getExtInstSetId(SPIRVExtInstSetKind Kind) const = 0;
 

@@ -330,7 +330,7 @@ public:
   bool isMemberDecorate() const { return OpCode == OpMemberDecorate; }
   bool isForward() const { return OpCode == internal::OpForward; }
   bool isLabel() const { return OpCode == OpLabel; }
-  bool isUndef() const { return OpCode == OpUndef; }
+  bool isUndef() const { return OpCode == OpUndef || OpCode == internal::OpUndefValueInternal; }
   bool isControlBarrier() const { return OpCode == OpControlBarrier; }
   bool isMemoryBarrier() const { return OpCode == OpMemoryBarrier; }
   bool isVariable() const { return OpCode == OpVariable; }
@@ -428,11 +428,13 @@ protected:
   bool canHaveMemberDecorates() const {
     return OpCode == OpTypeStruct || OpCode == internal::OpForward;
   }
+public:
   MemberDecorateMapType &getMemberDecorates() {
     assert(canHaveMemberDecorates());
     return MemberDecorates;
   }
 
+protected:
   void updateModuleVersion() const;
 
   SPIRVModule *Module;
@@ -984,16 +986,12 @@ private:
 #define _SPIRV_OP(x) typedef SPIRVEntryUnimplemented<Op##x> SPIRV##x;
 _SPIRV_OP(Nop)
 _SPIRV_OP(SourceContinued)
-_SPIRV_OP(TypeRuntimeArray)
 _SPIRV_OP(Image)
 _SPIRV_OP(ImageTexelPointer)
-_SPIRV_OP(ImageSampleDrefImplicitLod)
-_SPIRV_OP(ImageSampleDrefExplicitLod)
 _SPIRV_OP(ImageSampleProjImplicitLod)
 _SPIRV_OP(ImageSampleProjExplicitLod)
 _SPIRV_OP(ImageSampleProjDrefImplicitLod)
 _SPIRV_OP(ImageSampleProjDrefExplicitLod)
-_SPIRV_OP(ImageFetch)
 _SPIRV_OP(ImageGather)
 _SPIRV_OP(ImageDrefGather)
 _SPIRV_OP(QuantizeToF16)
@@ -1003,20 +1001,10 @@ _SPIRV_OP(IAddCarry)
 _SPIRV_OP(ISubBorrow)
 _SPIRV_OP(SMulExtended)
 _SPIRV_OP(UMulExtended)
-_SPIRV_OP(DPdx)
-_SPIRV_OP(DPdy)
-_SPIRV_OP(Fwidth)
-_SPIRV_OP(DPdxFine)
-_SPIRV_OP(DPdyFine)
-_SPIRV_OP(FwidthFine)
-_SPIRV_OP(DPdxCoarse)
-_SPIRV_OP(DPdyCoarse)
-_SPIRV_OP(FwidthCoarse)
 _SPIRV_OP(EmitVertex)
 _SPIRV_OP(EndPrimitive)
 _SPIRV_OP(EmitStreamVertex)
 _SPIRV_OP(EndStreamPrimitive)
-_SPIRV_OP(Kill)
 _SPIRV_OP(ImageSparseSampleImplicitLod)
 _SPIRV_OP(ImageSparseSampleExplicitLod)
 _SPIRV_OP(ImageSparseSampleDrefImplicitLod)

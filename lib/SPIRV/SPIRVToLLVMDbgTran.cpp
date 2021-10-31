@@ -64,7 +64,9 @@ static uint64_t getDerivedSizeInBits(const DIType *Ty) {
 SPIRVToLLVMDbgTran::SPIRVToLLVMDbgTran(SPIRVModule *TBM, Module *TM,
                                        SPIRVToLLVM *Reader)
     : BM(TBM), M(TM), Builder(*M), SPIRVReader(Reader) {
-  Enable = BM->hasDebugInfo();
+  // TODO: OpLines are all over the place now -> better hasDebugInfo()
+  Enable = true; // always enable for now
+  //Enable = BM->hasDebugInfo();
 }
 
 void SPIRVToLLVMDbgTran::addDbgInfoVersion() {

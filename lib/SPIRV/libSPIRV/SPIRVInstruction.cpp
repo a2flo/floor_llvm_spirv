@@ -44,6 +44,8 @@
 #include <unordered_set>
 
 namespace SPIRV {
+std::vector<Capability> SPIRVImageInstBase::image_caps;
+std::vector<Capability> SPIRVImageQueryInstBase::image_query_caps;
 
 // Complete constructor for instruction with type and id
 SPIRVInstruction::SPIRVInstruction(unsigned TheWordCount, Op TheOC,

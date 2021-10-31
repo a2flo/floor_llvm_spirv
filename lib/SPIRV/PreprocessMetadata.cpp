@@ -144,6 +144,11 @@ void PreprocessMetadataBase::visit(Module *M) {
   SPIRVMDBuilder B(*M);
   SPIRVMDWalker W(*M);
 
+  Triple TT(M->getTargetTriple());
+  assert(isSupportedTriple(TT) && "Invalid triple");
+  const bool is_vulkan =
+      (TT.getEnvironment() == llvm::Triple::EnvironmentType::Vulkan);
+
   preprocessOCLMetadata(M, &B, &W);
   preprocessVectorComputeMetadata(M, &B, &W);
 
@@ -155,21 +160,29 @@ void PreprocessMetadataBase::visit(Module *M) {
   if (auto *GV = M->getGlobalVariable("llvm.global_ctors"))
     preprocessCXXStructorList(EM, GV, spv::ExecutionModeInitializer);
 
+  if (is_vulkan) {
+    // NOTE: don't want work-group size metadata here, this is already
+    // handled elsewhere
+    return;
+  }
+
   // Add execution modes for kernels. We take it from metadata attached to
   // the kernel functions.
-  for (Function &Kernel : *M) {
-    if (Kernel.getCallingConv() != CallingConv::SPIR_KERNEL)
+  for (Function &Func : *M) {
+    if (Func.getCallingConv() != CallingConv::FLOOR_KERNEL &&
+		Func.getCallingConv() != CallingConv::FLOOR_VERTEX &&
+		Func.getCallingConv() != CallingConv::FLOOR_FRAGMENT)
       continue;
 
     // Specifing execution modes for the Kernel and adding it to the list
     // of ExecutionMode instructions.
 
     // !{void (i32 addrspace(1)*)* @kernel, i32 17, i32 X, i32 Y, i32 Z}
-    if (MDNode *WGSize = Kernel.getMetadata(kSPIR2MD::WGSize)) {
+    if (MDNode *WGSize = Func.getMetadata(kSPIR2MD::WGSize)) {
       unsigned X, Y, Z;
       decodeMDNode(WGSize, X, Y, Z);
       EM.addOp()
-          .add(&Kernel)
+          .add(&Func)
           .add(spv::ExecutionModeLocalSize)
           .add(X)
           .add(Y)
@@ -178,11 +191,11 @@ void PreprocessMetadataBase::visit(Module *M) {
     }
 
     // !{void (i32 addrspace(1)*)* @kernel, i32 18, i32 X, i32 Y, i32 Z}
-    if (MDNode *WGSizeHint = Kernel.getMetadata(kSPIR2MD::WGSizeHint)) {
+    if (MDNode *WGSizeHint = Func.getMetadata(kSPIR2MD::WGSizeHint)) {
       unsigned X, Y, Z;
       decodeMDNode(WGSizeHint, X, Y, Z);
       EM.addOp()
-          .add(&Kernel)
+          .add(&Func)
           .add(spv::ExecutionModeLocalSizeHint)
           .add(X)
           .add(Y)
@@ -191,18 +204,18 @@ void PreprocessMetadataBase::visit(Module *M) {
     }
 
     // !{void (i32 addrspace(1)*)* @kernel, i32 30, i32 hint}
-    if (MDNode *VecTypeHint = Kernel.getMetadata(kSPIR2MD::VecTyHint)) {
+    if (MDNode *VecTypeHint = Func.getMetadata(kSPIR2MD::VecTyHint)) {
       EM.addOp()
-          .add(&Kernel)
+          .add(&Func)
           .add(spv::ExecutionModeVecTypeHint)
           .add(transVecTypeHint(VecTypeHint))
           .done();
     }
 
     // !{void (i32 addrspace(1)*)* @kernel, i32 35, i32 size}
-    if (MDNode *ReqdSubgroupSize = Kernel.getMetadata(kSPIR2MD::SubgroupSize)) {
+    if (MDNode *ReqdSubgroupSize = Func.getMetadata(kSPIR2MD::SubgroupSize)) {
       EM.addOp()
-          .add(&Kernel)
+          .add(&Func)
           .add(spv::ExecutionModeSubgroupSize)
           .add(getMDOperandAsInt(ReqdSubgroupSize, 0))
           .done();
@@ -211,11 +224,11 @@ void PreprocessMetadataBase::visit(Module *M) {
     // !{void (i32 addrspace(1)*)* @kernel, i32 max_work_group_size, i32 X,
     //         i32 Y, i32 Z}
     if (MDNode *MaxWorkgroupSizeINTEL =
-            Kernel.getMetadata(kSPIR2MD::MaxWGSize)) {
+            Func.getMetadata(kSPIR2MD::MaxWGSize)) {
       unsigned X, Y, Z;
       decodeMDNode(MaxWorkgroupSizeINTEL, X, Y, Z);
       EM.addOp()
-          .add(&Kernel)
+          .add(&Func)
           .add(spv::ExecutionModeMaxWorkgroupSizeINTEL)
           .add(X)
           .add(Y)
@@ -224,23 +237,23 @@ void PreprocessMetadataBase::visit(Module *M) {
     }
 
     // !{void (i32 addrspace(1)*)* @kernel, i32 no_global_work_offset}
-    if (Kernel.getMetadata(kSPIR2MD::NoGlobalOffset)) {
-      EM.addOp().add(&Kernel).add(spv::ExecutionModeNoGlobalOffsetINTEL).done();
+    if (Func.getMetadata(kSPIR2MD::NoGlobalOffset)) {
+      EM.addOp().add(&Func).add(spv::ExecutionModeNoGlobalOffsetINTEL).done();
     }
 
     // !{void (i32 addrspace(1)*)* @kernel, i32 max_global_work_dim, i32 dim}
-    if (MDNode *MaxWorkDimINTEL = Kernel.getMetadata(kSPIR2MD::MaxWGDim)) {
+    if (MDNode *MaxWorkDimINTEL = Func.getMetadata(kSPIR2MD::MaxWGDim)) {
       EM.addOp()
-          .add(&Kernel)
+          .add(&Func)
           .add(spv::ExecutionModeMaxWorkDimINTEL)
           .add(getMDOperandAsInt(MaxWorkDimINTEL, 0))
           .done();
     }
 
     // !{void (i32 addrspace(1)*)* @kernel, i32 num_simd_work_items, i32 num}
-    if (MDNode *NumSIMDWorkitemsINTEL = Kernel.getMetadata(kSPIR2MD::NumSIMD)) {
+    if (MDNode *NumSIMDWorkitemsINTEL = Func.getMetadata(kSPIR2MD::NumSIMD)) {
       EM.addOp()
-          .add(&Kernel)
+          .add(&Func)
           .add(spv::ExecutionModeNumSIMDWorkitemsINTEL)
           .add(getMDOperandAsInt(NumSIMDWorkitemsINTEL, 0))
           .done();
@@ -249,9 +262,9 @@ void PreprocessMetadataBase::visit(Module *M) {
     // !{void (i32 addrspace(1)*)* @kernel, i32 scheduler_target_fmax_mhz,
     //   i32 num}
     if (MDNode *SchedulerTargetFmaxMhzINTEL =
-            Kernel.getMetadata(kSPIR2MD::FmaxMhz)) {
+            Func.getMetadata(kSPIR2MD::FmaxMhz)) {
       EM.addOp()
-          .add(&Kernel)
+          .add(&Func)
           .add(spv::ExecutionModeSchedulerTargetFmaxMhzINTEL)
           .add(getMDOperandAsInt(SchedulerTargetFmaxMhzINTEL, 0))
           .done();
@@ -292,13 +305,23 @@ void PreprocessMetadataBase::preprocessOCLMetadata(Module *M, SPIRVMDBuilder *B,
   unsigned CLVer = getOCLVersion(M, true);
   if (CLVer == 0)
     return;
+
+  Triple TT(M->getTargetTriple());
+  assert(isSupportedTriple(TT) && "Invalid triple");
+  const bool is_vulkan =
+      (TT.getEnvironment() == llvm::Triple::EnvironmentType::Vulkan);
+  if (is_vulkan)
+    EraseOCLMD = true;
+
   // Preprocess OpenCL-specific metadata
   // !spirv.Source = !{!x}
   // !{x} = !{i32 3, i32 102000}
   B->addNamedMD(kSPIRVMD::Source)
       .addOp()
-      .add(CLVer == kOCLVer::CL21 ? spv::SourceLanguageOpenCL_CPP
-                                  : spv::SourceLanguageOpenCL_C)
+      .add(!is_vulkan ? (CLVer == kOCLVer::CL21 ?
+						 spv::SourceLanguageOpenCL_CPP :
+						 spv::SourceLanguageOpenCL_C) :
+		   spv::SourceLanguageGLSL)
       .add(CLVer)
       .done();
   if (EraseOCLMD)
@@ -306,14 +329,20 @@ void PreprocessMetadataBase::preprocessOCLMetadata(Module *M, SPIRVMDBuilder *B,
 
   // !spirv.MemoryModel = !{!x}
   // !{x} = !{i32 1, i32 2}
-  Triple TT(M->getTargetTriple());
-  assert(isSupportedTriple(TT) && "Invalid triple");
-  B->addNamedMD(kSPIRVMD::MemoryModel)
-      .addOp()
-      .add(TT.isArch32Bit() ? spv::AddressingModelPhysical32
-                            : spv::AddressingModelPhysical64)
-      .add(spv::MemoryModelOpenCL)
-      .done();
+  if (!is_vulkan) {
+    B->addNamedMD(kSPIRVMD::MemoryModel)
+        .addOp()
+        .add(TT.isArch32Bit() ? spv::AddressingModelPhysical32
+                              : spv::AddressingModelPhysical64)
+        .add(spv::MemoryModelOpenCL)
+        .done();
+  } else {
+    B->addNamedMD(kSPIRVMD::MemoryModel)
+        .addOp()
+        .add(spv::AddressingModelPhysicalStorageBuffer64)
+        .add(spv::MemoryModelVulkan)
+        .done();
+  }
 
   // Add source extensions
   // !spirv.SourceExtension = !{!x, !y, ...}
@@ -322,8 +351,12 @@ void PreprocessMetadataBase::preprocessOCLMetadata(Module *M, SPIRVMDBuilder *B,
   auto Exts = getNamedMDAsStringSet(M, kSPIR2MD::Extensions);
   if (!Exts.empty()) {
     auto N = B->addNamedMD(kSPIRVMD::SourceExtension);
-    for (auto &I : Exts)
+    for (auto &I : Exts) {
+      // skip cl_* extensions for vulkan
+      if (is_vulkan && I.find("cl_") == 0)
+        continue;
       N.addOp().add(I).done();
+    }
   }
   if (EraseOCLMD)
     B->eraseNamedMD(kSPIR2MD::Extensions).eraseNamedMD(kSPIR2MD::OptFeatures);
@@ -340,7 +373,7 @@ void PreprocessMetadataBase::preprocessVectorComputeMetadata(Module *M,
   auto EM = B->addNamedMD(kSPIRVMD::ExecutionMode);
 
   for (auto &F : *M) {
-    if (F.getCallingConv() != CallingConv::SPIR_KERNEL)
+    if (F.getCallingConv() != CallingConv::FLOOR_KERNEL)
       continue;
 
     // Add VC float control execution modes

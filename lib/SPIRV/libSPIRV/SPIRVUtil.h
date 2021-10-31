@@ -40,8 +40,13 @@
 #ifndef SPIRV_LIBSPIRV_SPIRVUTIL_H
 #define SPIRV_LIBSPIRV_SPIRVUTIL_H
 
+#if 1
+#include "llvm/Support/raw_ostream.h"
+#define spv_ostream llvm::raw_ostream
+#else
 #include <ostream>
 #define spv_ostream std::ostream
+#endif
 
 #include "llvm/Support/raw_ostream.h"
 
@@ -103,21 +108,25 @@ public:
     return Val;
   }
 
-  static const SPIRVMap &getMap() {
+  static SPIRVMap &getMapMod() {
 #if defined(_MSC_VER) && (_MSC_VER < 1900)
     llvm::sys::ScopedLock mapGuard(MapLock);
 #endif // LLVM_MSC_PREREQ(1900)
-    static const SPIRVMap Map(false);
+    static SPIRVMap Map(false);
     return Map;
   }
 
-  static const SPIRVMap &getRMap() {
+  static SPIRVMap &getRMapMod() {
 #if defined(_MSC_VER) && (_MSC_VER < 1900)
     llvm::sys::ScopedLock mapGuard(MapLock);
 #endif // LLVM_MSC_PREREQ(1900)
-    static const SPIRVMap Map(true);
+    static SPIRVMap Map(true);
     return Map;
   }
+
+  static const SPIRVMap &getMap() { return getMapMod(); }
+
+  static const SPIRVMap &getRMap() { return getRMapMod(); }
 
   static void foreach (std::function<void(Ty1, Ty2)> F) {
     for (auto &I : getMap().Map)
@@ -152,6 +161,14 @@ public:
       *Val = Loc->second;
     return true;
   }
+
+  static void replace(Ty1 Key, Ty2 Val) {
+    SPIRVMap &Map = getMapMod();
+    SPIRVMap &RMap = getRMapMod();
+    Map.Map[Key] = Val;
+    RMap.RevMap[Val] = Key;
+  }
+
   SPIRVMap() : IsReverse(false) {}
 
 protected:

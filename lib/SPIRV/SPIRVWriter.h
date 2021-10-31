@@ -91,6 +91,7 @@ public:
   bool transAlign(Value *V, SPIRVValue *BV);
   std::vector<SPIRVWord> transArguments(CallInst *, SPIRVBasicBlock *,
                                         SPIRVEntry *);
+  bool transVulkanVersion();
   bool transSourceLanguage();
   bool transExtension();
   bool transBuiltinSet();
@@ -132,7 +133,7 @@ public:
                                                        SPIRVInstruction *I);
 
   typedef DenseMap<Type *, SPIRVType *> LLVMToSPIRVTypeMap;
-  typedef DenseMap<Value *, SPIRVValue *> LLVMToSPIRVValueMap;
+  typedef DenseMap<const Value *, SPIRVValue *> LLVMToSPIRVValueMap;
   typedef DenseMap<MDNode *, SmallSet<SPIRVId, 2>> LLVMToSPIRVMetadataMap;
 
   void setOCLTypeToSPIRV(OCLTypeToSPIRVBase *OCLTypeToSPIRV) {
@@ -161,8 +162,15 @@ private:
   bool joinFPContract(Function *F, FPContract C);
   void fpContractUpdateRecursive(Function *F, FPContract FPC);
 
+  // adds a SPIR-V float/int/uint scalar or vector type based on the LLVM type
+  // based on the 'is_signed' signedness - this is different to mapType and
+  // transType, because these won't handle signedness.
+  SPIRVType *addSignPreservingLLVMType(llvm::Type *type,
+                                       const bool is_signed = true);
+
   SPIRVType *mapType(Type *T, SPIRVType *BT);
-  SPIRVValue *mapValue(Value *V, SPIRVValue *BV);
+  SPIRVValue *mapValue(const Value *V, SPIRVValue *BV);
+  SPIRVValue *getSPIRVValue(const Value *V) { return ValueMap[V]; }
   SPIRVType *getSPIRVType(Type *T) { return TypeMap[T]; }
   SPIRVErrorLog &getErrorLog() { return BM->getErrorLog(); }
   llvm::IntegerType *getSizetType(unsigned AS = 0);
@@ -193,7 +201,8 @@ private:
                                SPIRVExtInstSetKind *BuiltinSet = nullptr,
                                SPIRVWord *EntryPoint = nullptr,
                                SmallVectorImpl<std::string> *Dec = nullptr);
-  bool isKernel(Function *F);
+  bool isEntryPoint(Function *F);
+  spv::ExecutionModel getEntryPointType(Function *F, unsigned int SrcLang);
   bool transMetadata();
   bool transOCLMetadata();
   SPIRVInstruction *transBuiltinToInst(StringRef DemangledName, CallInst *CI,
@@ -216,6 +225,48 @@ private:
       const Function *FS,
       const std::unordered_set<const Function *> Funcs) const;
   void collectInputOutputVariables(SPIRVFunction *SF, Function *F);
+
+  void decorateComposite(llvm::Type *llvm_type, SPIRVType *spirv_type);
+
+  bool ignore_next_unreachable{false};
+
+  //
+  struct spirv_global_io_type {
+    bool is_constant{false};
+    bool is_uniform{false};
+    bool is_iub{false};
+    bool is_input{false};
+    bool is_builtin{false};
+    bool is_image{false};
+    bool is_fbo_color{false};
+    bool is_fbo_depth{false};
+    bool is_read_only{false};
+    bool is_write_only{false};
+    bool set_location{false};
+    uint32_t location{0};
+  };
+
+  GlobalVariable *emitShaderGlobal(
+      const Function &F, SPIRVFunction *spirv_func, const std::string &var_name,
+      llvm::Type *llvm_type, uint32_t address_space,
+      const spirv_global_io_type global_type, const std::string &md_info,
+      SPIRVVariable **created_spirv_var = nullptr,
+      spv::BuiltIn builtin = spv::BuiltIn::BuiltInPosition);
+
+  SPIRVVariable *
+  emitShaderSPIRVGlobal(SPIRVFunction *spirv_func, const GlobalVariable &GV,
+                        const std::string &var_name, uint32_t address_space,
+                        const spirv_global_io_type global_type,
+                        const std::string &md_info,
+                        spv::BuiltIn builtin = spv::BuiltIn::BuiltInPosition);
+
+  SPIRVVariable *immutable_samplers{nullptr};
+  std::pair<SPIRVInstruction *, Op>
+  transVulkanImageFunction(CallInst *CI, SPIRVBasicBlock *BB,
+                           const std::string &DemangledName);
+
+  // function image arg -> image type map
+  std::unordered_map<const llvm::Value *, SPIRVType *> image_type_map;
 };
 
 class LLVMToSPIRVPass : public PassInfoMixin<LLVMToSPIRVPass>,

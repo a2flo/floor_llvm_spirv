@@ -78,6 +78,7 @@ enum SPIRVExtInstSetKind {
   SPIRVEIS_OpenCL,
   SPIRVEIS_Debug,
   SPIRVEIS_OpenCL_DebugInfo_100,
+  SPIRVEIS_GLSL,
   SPIRVEIS_Count,
 };
 
@@ -129,6 +130,7 @@ template <> inline void SPIRVMap<SPIRVExtInstSetKind, std::string>::init() {
   add(SPIRVEIS_OpenCL, "OpenCL.std");
   add(SPIRVEIS_Debug, "SPIRV.debug");
   add(SPIRVEIS_OpenCL_DebugInfo_100, "OpenCL.DebugInfo.100");
+  add(SPIRVEIS_GLSL, "GLSL.std.450");
 }
 typedef SPIRVMap<SPIRVExtInstSetKind, std::string> SPIRVBuiltinSetNameMap;
 
@@ -175,7 +177,6 @@ template <> inline void SPIRVMap<SPIRVCapabilityKind, SPIRVCapVec>::init() {
   ADD_VEC_INIT(CapabilityImageRect, {CapabilitySampledRect});
   ADD_VEC_INIT(CapabilitySampledRect, {CapabilityShader});
   ADD_VEC_INIT(CapabilityGenericPointer, {CapabilityAddresses});
-  ADD_VEC_INIT(CapabilityInt8, {CapabilityKernel});
   ADD_VEC_INIT(CapabilityInputAttachment, {CapabilityShader});
   ADD_VEC_INIT(CapabilitySparseResidency, {CapabilityShader});
   ADD_VEC_INIT(CapabilityMinLod, {CapabilityShader});
@@ -197,6 +198,7 @@ template <> inline void SPIRVMap<SPIRVCapabilityKind, SPIRVCapVec>::init() {
                {CapabilitySubgroupAvcMotionEstimationINTEL});
   ADD_VEC_INIT(CapabilitySubgroupAvcMotionEstimationChromaINTEL,
                {CapabilitySubgroupAvcMotionEstimationIntraINTEL});
+  ADD_VEC_INIT(CapabilityMultiView, {CapabilityShader});
 }
 
 template <> inline void SPIRVMap<SPIRVExecutionModelKind, SPIRVCapVec>::init() {
@@ -341,7 +343,9 @@ template <> inline void SPIRVMap<ImageOperandsMask, SPIRVCapVec>::init() {
 
 template <> inline void SPIRVMap<Decoration, SPIRVCapVec>::init() {
   ADD_VEC_INIT(DecorationRelaxedPrecision, {CapabilityShader});
+#if 0 // both Kernel and Shader are valid, but either will already be specified
   ADD_VEC_INIT(DecorationSpecId, {CapabilityKernel});
+#endif
   ADD_VEC_INIT(DecorationBlock, {CapabilityShader});
   ADD_VEC_INIT(DecorationBufferBlock, {CapabilityShader});
   ADD_VEC_INIT(DecorationRowMajor, {CapabilityMatrix});
@@ -474,12 +478,18 @@ template <> inline void SPIRVMap<BuiltIn, SPIRVCapVec>::init() {
   ADD_VEC_INIT(BuiltInEnqueuedWorkgroupSize, {CapabilityKernel});
   ADD_VEC_INIT(BuiltInGlobalOffset, {CapabilityKernel});
   ADD_VEC_INIT(BuiltInGlobalLinearId, {CapabilityKernel});
+#if 0 // both Kernel and Shader
   ADD_VEC_INIT(BuiltInSubgroupSize, {CapabilityKernel});
+#endif
   ADD_VEC_INIT(BuiltInSubgroupMaxSize, {CapabilityKernel});
+#if 0 // both Kernel and Shader
   ADD_VEC_INIT(BuiltInNumSubgroups, {CapabilityKernel});
+#endif
   ADD_VEC_INIT(BuiltInNumEnqueuedSubgroups, {CapabilityKernel});
+#if 0 // both Kernel and Shader
   ADD_VEC_INIT(BuiltInSubgroupId, {CapabilityKernel});
   ADD_VEC_INIT(BuiltInSubgroupLocalInvocationId, {CapabilityKernel});
+#endif
   ADD_VEC_INIT(BuiltInSubgroupEqMask, {CapabilityGroupNonUniformBallot});
   ADD_VEC_INIT(BuiltInSubgroupGeMask, {CapabilityGroupNonUniformBallot});
   ADD_VEC_INIT(BuiltInSubgroupGtMask, {CapabilityGroupNonUniformBallot});
@@ -493,6 +503,7 @@ template <> inline void SPIRVMap<BuiltIn, SPIRVCapVec>::init() {
                {internal::CapabilityHWThreadQueryINTEL});
   ADD_VEC_INIT(internal::BuiltInMaxHWThreadIDPerSubDeviceINTEL,
                {internal::CapabilityHWThreadQueryINTEL});
+  ADD_VEC_INIT(BuiltInViewIndex, {CapabilityMultiView});
 }
 
 template <> inline void SPIRVMap<MemorySemanticsMask, SPIRVCapVec>::init() {

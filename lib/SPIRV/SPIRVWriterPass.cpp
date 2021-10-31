@@ -18,7 +18,7 @@
 #include "llvm/Pass.h"
 using namespace llvm;
 
-PreservedAnalyses SPIRVWriterPass::run(Module &M) {
+PreservedAnalyses SPIRVWriterPass::run(Module &M, ModuleAnalysisManager&) {
   // FIXME: at the moment LLVM/SPIR-V translation errors are ignored.
   std::string Err;
   writeSpirv(&M, Opts, OS, Err);
@@ -27,12 +27,12 @@ PreservedAnalyses SPIRVWriterPass::run(Module &M) {
 
 namespace {
 class WriteSPIRVPass : public ModulePass {
-  std::ostream &OS; // std::ostream to print on
+  raw_ostream& OS; // std::ostream to print on
   SPIRV::TranslatorOpts Opts;
 
 public:
   static char ID; // Pass identification, replacement for typeid
-  WriteSPIRVPass(std::ostream &OS, const SPIRV::TranslatorOpts &Opts)
+  WriteSPIRVPass(raw_ostream &OS, const SPIRV::TranslatorOpts &Opts)
       : ModulePass(ID), OS(OS), Opts(Opts) {}
 
   StringRef getPassName() const override { return "SPIRV Writer"; }
@@ -48,15 +48,17 @@ public:
 
 char WriteSPIRVPass::ID = 0;
 
-ModulePass *llvm::createSPIRVWriterPass(std::ostream &Str) {
+ModulePass *llvm::createSPIRVWriterPass(raw_ostream &Str) {
   SPIRV::TranslatorOpts DefaultOpts;
+#if 0 // NOPE
   // To preserve old behavior of the translator, let's enable all extensions
   // by default in this API
   DefaultOpts.enableAllExtensions();
+#endif
   return createSPIRVWriterPass(Str, DefaultOpts);
 }
 
-ModulePass *llvm::createSPIRVWriterPass(std::ostream &Str,
+ModulePass *llvm::createSPIRVWriterPass(raw_ostream &Str,
                                         const SPIRV::TranslatorOpts &Opts) {
   return new WriteSPIRVPass(Str, Opts);
 }

@@ -79,6 +79,7 @@ public:
 
   bool isTypeVoid() const;
   bool isTypeArray() const;
+  bool isTypeRuntimeArray() const;
   bool isTypeBool() const;
   bool isTypeComposite() const;
   bool isTypeEvent() const;
@@ -177,6 +178,16 @@ public:
     }
   }
 
+  // gets the signed integer type with the same bit-width as this type
+  SPIRVTypeInt *getSigned() const {
+    return Module->addIntegerType(BitWidth, true);
+  }
+
+  // gets the unsigned integer type with the same bit-width as this type
+  SPIRVTypeInt *getUnsigned() const {
+    return Module->addIntegerType(BitWidth, false);
+  }
+
 protected:
   _SPIRV_DEF_ENCDEC3(Id, BitWidth, IsSigned)
   void validate() const override {
@@ -207,11 +218,15 @@ public:
   SPIRVCapVec getRequiredCapability() const override {
     SPIRVCapVec CV;
     if (isTypeFloat(16)) {
-      CV.push_back(CapabilityFloat16Buffer);
-      auto Extensions = getModule()->getSourceExtension();
-      if (std::any_of(Extensions.begin(), Extensions.end(),
-                      [](const std::string &I) { return I == "cl_khr_fp16"; }))
+      if (Module->getSourceLanguage(nullptr) == spv::SourceLanguageGLSL) {
         CV.push_back(CapabilityFloat16);
+      } else {
+        CV.push_back(CapabilityFloat16Buffer);
+        auto Extensions = getModule()->getSourceExtension();
+        if (std::any_of(Extensions.begin(), Extensions.end(),
+                        [](const std::string &I) { return I == "cl_khr_fp16"; }))
+          CV.push_back(CapabilityFloat16);
+      }
     } else if (isTypeFloat(64))
       CV.push_back(CapabilityFloat64);
     return CV;
@@ -248,6 +263,10 @@ public:
   }
   SPIRVStorageClassKind getStorageClass() const { return ElemStorageClass; }
   SPIRVCapVec getRequiredCapability() const override {
+    // cap requirements are different for shaders and kernels
+    if (Module->getSourceLanguage(nullptr) == spv::SourceLanguageGLSL) {
+      return getCapability(ElemStorageClass);
+    }
     auto Cap = getVec(CapabilityAddresses);
     if (getElementType()->isTypeFloat(16))
       Cap.push_back(CapabilityFloat16Buffer);
@@ -411,6 +430,36 @@ private:
   SPIRVId Length;      // Array Length
 };
 
+class SPIRVTypeRuntimeArray : public SPIRVType {
+public:
+  // Complete constructor
+  SPIRVTypeRuntimeArray(SPIRVModule *M, SPIRVId TheId, SPIRVType *TheElemType)
+      : SPIRVType(M, 3, OpTypeRuntimeArray, TheId), ElemType(TheElemType) {
+    validate();
+  }
+  // Incomplete constructor
+  SPIRVTypeRuntimeArray() : SPIRVType(OpTypeRuntimeArray), ElemType(nullptr) {}
+
+  SPIRVType *getElementType() const { return ElemType; }
+  SPIRVCapVec getRequiredCapability() const override {
+    return getElementType()->getRequiredCapability();
+  }
+  std::vector<SPIRVEntry *> getNonLiteralOperands() const override {
+    std::vector<SPIRVEntry *> Operands(1, ElemType);
+    return Operands;
+  }
+
+protected:
+  _SPIRV_DEF_ENCDEC2(Id, ElemType)
+  void validate() const override {
+    SPIRVEntry::validate();
+    ElemType->validate();
+  }
+
+private:
+  SPIRVType *ElemType; // Element Type
+};
+
 class SPIRVTypeOpaque : public SPIRVType {
 public:
   // Complete constructor
@@ -469,6 +518,10 @@ inline void SPIRVMap<std::string, SPIRVTypeImageDescriptor>::init() {
   _SPIRV_OP(image2d_msaa_depth_t, Dim2D, 1, 0, 1, 0, 0)
   _SPIRV_OP(image2d_array_msaa_depth_t, Dim2D, 1, 1, 1, 0, 0)
   _SPIRV_OP(image3d_t, Dim3D, 0, 0, 0, 0, 0)
+  _SPIRV_OP(imagecube_t, DimCube, 0, 0, 0, 0, 0)
+  _SPIRV_OP(imagecube_array_t, DimCube, 0, 1, 0, 0, 0)
+  _SPIRV_OP(imagecube_depth_t, DimCube, 1, 0, 0, 0, 0)
+  _SPIRV_OP(imagecube_array_depth_t, DimCube, 1, 1, 0, 0, 0)
 #undef _SPIRV_OP
 }
 typedef SPIRVMap<std::string, SPIRVTypeImageDescriptor> OCLSPIRVImageTypeMap;
@@ -487,36 +540,44 @@ public:
   SPIRVTypeImage(SPIRVModule *M, SPIRVId TheId, SPIRVId TheSampledType,
                  const SPIRVTypeImageDescriptor &TheDesc)
       : SPIRVType(M, FixedWC, OC, TheId), SampledType(TheSampledType),
-        Desc(TheDesc) {
+        Desc(TheDesc), Acc(spv::AccessQualifierNone) {
     validate();
   }
   SPIRVTypeImage(SPIRVModule *M, SPIRVId TheId, SPIRVId TheSampledType,
                  const SPIRVTypeImageDescriptor &TheDesc,
                  SPIRVAccessQualifierKind TheAcc)
       : SPIRVType(M, FixedWC + 1, OC, TheId), SampledType(TheSampledType),
-        Desc(TheDesc) {
-    Acc.push_back(TheAcc);
+        Desc(TheDesc), Acc(TheAcc) {
     validate();
   }
   SPIRVTypeImage() : SPIRVType(OC), SampledType(SPIRVID_INVALID), Desc() {}
   const SPIRVTypeImageDescriptor &getDescriptor() const { return Desc; }
   bool isOCLImage() const { return Desc.Sampled == 0 && Desc.Format == 0; }
-  bool hasAccessQualifier() const { return !Acc.empty(); }
+  bool hasAccessQualifier() const { return Acc != spv::AccessQualifierNone; }
   SPIRVAccessQualifierKind getAccessQualifier() const {
     assert(hasAccessQualifier());
-    return Acc[0];
+    return Acc;
   }
   SPIRVCapVec getRequiredCapability() const override {
     SPIRVCapVec CV;
-    CV.push_back(CapabilityImageBasic);
-    if (Desc.Dim == SPIRVImageDimKind::Dim1D)
+    if (Module->getSourceLanguage(nullptr) != spv::SourceLanguageGLSL) {
+      CV.push_back(CapabilityImageBasic);
+      if (Acc != spv::AccessQualifierNone && Acc == AccessQualifierReadWrite)
+        CV.push_back(CapabilityImageReadWrite);
+      if (Desc.MS)
+        CV.push_back(CapabilityImageMipmap);
+    } else {
+      if (Desc.MS)
+        CV.push_back(CapabilityImageMSArray);
+    }
+    if (Desc.Dim == spv::Dim1D) {
       CV.push_back(CapabilitySampled1D);
-    else if (Desc.Dim == SPIRVImageDimKind::DimBuffer)
+      if (Desc.Sampled == 2) {
+        CV.push_back(CapabilityImage1D);
+      }
+    } else if (Desc.Dim == spv::DimBuffer) {
       CV.push_back(CapabilitySampledBuffer);
-    if (Acc.size() > 0 && Acc[0] == AccessQualifierReadWrite)
-      CV.push_back(CapabilityImageReadWrite);
-    if (Desc.MS)
-      CV.push_back(CapabilityImageMipmap);
+    }
     return CV;
   }
   SPIRVType *getSampledType() const { return get<SPIRVType>(SampledType); }
@@ -526,30 +587,39 @@ public:
   }
 
 protected:
-  _SPIRV_DEF_ENCDEC9(Id, SampledType, Desc.Dim, Desc.Depth, Desc.Arrayed,
-                     Desc.MS, Desc.Sampled, Desc.Format, Acc)
-  // The validation assumes OpenCL image or sampler type.
+  void encode(spv_ostream &O) const override {
+    getEncoder(O) << Id << SampledType << Desc.Dim << Desc.Depth << Desc.Arrayed
+                  << Desc.MS << Desc.Sampled << Desc.Format;
+    if (Acc != spv::AccessQualifierNone)
+      getEncoder(O) << Acc;
+  }
+  void decode(std::istream &I) override {
+    getDecoder(I) >> Id >> SampledType >> Desc.Dim >> Desc.Depth >>
+        Desc.Arrayed >> Desc.MS >> Desc.Sampled >> Desc.Format;
+    // TODO: test this
+    if (WordCount >= 10)
+      getDecoder(I) >> Acc;
+    else
+      Acc = spv::AccessQualifierNone;
+  }
   void validate() const override {
     assert(OpCode == OC);
-    assert(WordCount == FixedWC + Acc.size());
-    assert(SampledType != SPIRVID_INVALID && "Invalid sampled type");
-    assert(Desc.Dim <= 5);
+    assert(WordCount == FixedWC + (Acc != spv::AccessQualifierNone ? 1 : 0));
+    assert(Desc.Dim < DimMax);
     assert(Desc.Depth <= 1);
     assert(Desc.Arrayed <= 1);
     assert(Desc.MS <= 1);
-    assert(Desc.Sampled == 0); // For OCL only
-    assert(Desc.Format == 0);  // For OCL only
-    assert(Acc.size() <= 1);
+    assert(Desc.Sampled <= 2);
+    assert(Desc.Format < ImageFormatMax);
   }
   void setWordCount(SPIRVWord TheWC) override {
     WordCount = TheWC;
-    Acc.resize(WordCount - FixedWC);
   }
 
 private:
   SPIRVId SampledType;
   SPIRVTypeImageDescriptor Desc;
-  std::vector<SPIRVAccessQualifierKind> Acc;
+  SPIRVAccessQualifierKind Acc;
 };
 
 class SPIRVTypeSampler : public SPIRVType {
@@ -911,7 +981,7 @@ protected:
   }
   void setWordCount(SPIRVWord TheWC) override {
     if (TheWC > FixedWC)
-      AccessKind = SPIRVAccessQualifierKind::AccessQualifierMax;
+      AccessKind = SPIRVAccessQualifierKind::AccessQualifierNone;
     WordCount = TheWC;
   }
 

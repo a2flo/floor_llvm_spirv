@@ -94,11 +94,11 @@ enum OCLScopeKind {
 // To avoid any inconsistence here, constants are explicitly initialized with
 // the corresponding constants from 'std::memory_order' enum.
 enum OCLMemOrderKind {
-  OCLMO_relaxed = std::memory_order::memory_order_relaxed,
-  OCLMO_acquire = std::memory_order::memory_order_acquire,
-  OCLMO_release = std::memory_order::memory_order_release,
-  OCLMO_acq_rel = std::memory_order::memory_order_acq_rel,
-  OCLMO_seq_cst = std::memory_order::memory_order_seq_cst
+  OCLMO_relaxed = (uint32_t)std::memory_order_relaxed,
+  OCLMO_acquire = (uint32_t)std::memory_order_acquire,
+  OCLMO_release = (uint32_t)std::memory_order_release,
+  OCLMO_acq_rel = (uint32_t)std::memory_order_acq_rel,
+  OCLMO_seq_cst = (uint32_t)std::memory_order_seq_cst
 };
 
 enum IntelFPGAMemoryAccessesVal {
@@ -247,6 +247,7 @@ const static char FixedLogINTEL[] = "intel_arbitrary_fixed_log";
 const static char FixedExpINTEL[] = "intel_arbitrary_fixed_exp";
 const static char FMax[] = "fmax";
 const static char FMin[] = "fmin";
+const static char FMod[] = "fmod";
 const static char FPGARegIntel[] = "__builtin_intel_fpga_reg";
 const static char GetFence[] = "get_fence";
 const static char GetImageArraySize[] = "get_image_array_size";
@@ -354,6 +355,11 @@ enum Kind {
   _SPIRV_OP(cl_khr_egl_event)
   _SPIRV_OP(cl_khr_srgb_image_writes)
   _SPIRV_OP(cl_khr_extended_bit_ops)
+  _SPIRV_OP(vk_capability_int16)
+  _SPIRV_OP(vk_capability_int64)
+  _SPIRV_OP(vk_capability_float16)
+  _SPIRV_OP(vk_capability_float64)
+  _SPIRV_OP(vk_capability_multiview)
 #undef _SPIRV_OP
 };
 // clang-format on
@@ -375,12 +381,14 @@ const static char TypePrefix[] = "opencl.intel_sub_group_avc_";
 
 /// Get instruction index for SPIR-V extended instruction for OpenCL.std
 ///   extended instruction set.
-/// \param MangledName The mangled name of OpenCL builtin function.
-/// \param DemangledName The demangled name of OpenCL builtin function if
+/// \param MangledName The mangled name of OpenCL/GLSL builtin function.
+/// \param DemangledName The demangled name of OpenCL/GLSL builtin function if
 ///   not empty.
-/// \return instruction index of extended instruction if the OpenCL builtin
-///   function is translated to an extended instruction, otherwise ~0U.
-unsigned getExtOp(StringRef MangledName, StringRef DemangledName = "");
+/// \param ext_kind the extended instruction set kind that should be used
+/// \return instruction index of extended instruction if the OpenCL/GLSL
+///   builtin function is translated to an extended instruction, otherwise ~0U.
+unsigned getExtOp(StringRef MangledName, StringRef DemangledName,
+                  SPIRVExtInstSetKind ext_kind);
 
 /// Get literal arguments of call of atomic_work_item_fence.
 AtomicWorkItemFenceLiterals getAtomicWorkItemFenceLiterals(CallInst *CI);

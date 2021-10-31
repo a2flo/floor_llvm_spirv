@@ -195,6 +195,11 @@ template <> void SPIRVMap<OclExt::Kind, std::string>::init() {
   _SPIRV_OP(cl_khr_egl_event)
   _SPIRV_OP(cl_khr_srgb_image_writes)
   _SPIRV_OP(cl_khr_extended_bit_ops)
+  _SPIRV_OP(vk_capability_int16)
+  _SPIRV_OP(vk_capability_int64)
+  _SPIRV_OP(vk_capability_float16)
+  _SPIRV_OP(vk_capability_float64)
+  _SPIRV_OP(vk_capability_multiview)
 #undef _SPIRV_OP
 }
 
@@ -208,6 +213,11 @@ template <> void SPIRVMap<OclExt::Kind, SPIRVCapabilityKind>::init() {
   add(OclExt::cl_khr_mipmap_image, CapabilityImageMipmap);
   add(OclExt::cl_khr_mipmap_image_writes, CapabilityImageMipmap);
   add(OclExt::cl_khr_extended_bit_ops, CapabilityBitInstructions);
+  add(OclExt::vk_capability_int16, CapabilityInt16);
+  add(OclExt::vk_capability_int64, CapabilityInt64);
+  add(OclExt::vk_capability_float16, CapabilityFloat16);
+  add(OclExt::vk_capability_float64, CapabilityFloat64);
+  add(OclExt::vk_capability_multiview, CapabilityMultiView);
 }
 
 /// Map OpenCL work functions to SPIR-V builtin variables.
@@ -247,6 +257,8 @@ template <> void SPIRVMap<std::string, SPIRVBuiltinVariableKind>::init() {
 class SPIRVInstruction;
 template <> void SPIRVMap<std::string, Op, SPIRVInstruction>::init() {
 #define _SPIRV_OP(x, y) add("atom_" #x, OpAtomic##y);
+  // Vulkan float32/float64 atomic add
+  _SPIRV_OP(fadd, FAddEXT)
   // cl_khr_int64_base_atomics builtins
   _SPIRV_OP(add, IAdd)
   _SPIRV_OP(sub, ISub)
@@ -272,6 +284,8 @@ template <> void SPIRVMap<std::string, Op, SPIRVInstruction>::init() {
   _SPIRV_OP(compare_exchange_weak_explicit, AtomicCompareExchangeWeak)
   _SPIRV_OP(inc, AtomicIIncrement)
   _SPIRV_OP(dec, AtomicIDecrement)
+  // Vulkan float32/float64 atomic add
+  _SPIRV_OP(fetch_fadd_explicit, AtomicFAddEXT)
   _SPIRV_OP(fetch_add_explicit, AtomicIAdd)
   _SPIRV_OP(fetch_sub_explicit, AtomicISub)
   _SPIRV_OP(fetch_umin_explicit, AtomicUMin)
@@ -370,6 +384,8 @@ template <> void SPIRVMap<std::string, Op, SPIRVInstruction>::init() {
   _SPIRV_OP(get_image_channel_order, ImageQueryOrder)
   _SPIRV_OP(get_image_num_mip_levels, ImageQueryLevels)
   _SPIRV_OP(get_image_num_samples, ImageQuerySamples)
+  // GLSL or standard SPIR-V (TODO: how to ignore these for OpenCL?)
+  _SPIRV_OP(fmod, FMod)
   // Intel Subgroups builtins
   _SPIRV_OP(intel_sub_group_shuffle, SubgroupShuffleINTEL)
   _SPIRV_OP(intel_sub_group_shuffle_down, SubgroupShuffleDownINTEL)
@@ -671,6 +687,8 @@ bool isComputeAtomicOCLBuiltin(StringRef DemangledName) {
     return false;
 
   return llvm::StringSwitch<bool>(DemangledName)
+      .EndsWith("fadd", true)
+      .EndsWith("add", true)
       .EndsWith("sub", true)
       .EndsWith("atomic_add", true)
       .EndsWith("atomic_min", true)
@@ -684,6 +702,8 @@ bool isComputeAtomicOCLBuiltin(StringRef DemangledName) {
       .EndsWith("and", true)
       .EndsWith("or", true)
       .EndsWith("xor", true)
+      .EndsWith("fadd_explicit", true)
+      .EndsWith("add_explicit", true)
       .EndsWith("sub_explicit", true)
       .EndsWith("or_explicit", true)
       .EndsWith("xor_explicit", true)
@@ -713,34 +733,62 @@ BarrierLiterals getBarrierLiterals(CallInst *CI) {
                          Scope);
 }
 
-unsigned getExtOp(StringRef OrigName, StringRef GivenDemangledName) {
+unsigned getExtOp(StringRef OrigName, StringRef GivenDemangledName,
+                  SPIRVExtInstSetKind ext_kind) {
   std::string DemangledName{GivenDemangledName};
   if (DemangledName.empty() || !oclIsBuiltin(OrigName, GivenDemangledName))
     return ~0U;
   LLVM_DEBUG(dbgs() << "getExtOp: demangled name: " << DemangledName << '\n');
-  OCLExtOpKind EOC;
-  bool Found = OCLExtOpMap::rfind(DemangledName, &EOC);
-  if (!Found) {
-    std::string Prefix;
-    switch (lastFuncParamType(OrigName)) {
-    case ParamType::UNSIGNED:
-      Prefix = "u_";
-      break;
-    case ParamType::SIGNED:
-      Prefix = "s_";
-      break;
-    case ParamType::FLOAT:
-      Prefix = "f";
-      break;
-    case ParamType::UNKNOWN:
-      break;
+  if (ext_kind == SPIRVExtInstSetKind::SPIRVEIS_OpenCL) {
+    OCLExtOpKind EOC;
+    bool Found = OCLExtOpMap::rfind(DemangledName, &EOC);
+    if (!Found) {
+      std::string Prefix;
+      switch (lastFuncParamType(OrigName)) {
+      case ParamType::UNSIGNED:
+        Prefix = "u_";
+        break;
+      case ParamType::SIGNED:
+        Prefix = "s_";
+        break;
+      case ParamType::FLOAT:
+        Prefix = "f";
+        break;
+      case ParamType::UNKNOWN:
+        break;
+      }
+      Found = OCLExtOpMap::rfind(Prefix + DemangledName, &EOC);
     }
-    Found = OCLExtOpMap::rfind(Prefix + DemangledName, &EOC);
+    if (Found)
+      return EOC;
+    else
+      return ~0U;
+  } else if (ext_kind == SPIRVExtInstSetKind::SPIRVEIS_GLSL) {
+    GLSLExtOpKind EGLSL;
+    bool Found = GLSLExtOpMap::rfind(DemangledName, &EGLSL);
+    if (!Found) {
+      std::string Prefix;
+      switch (lastFuncParamType(OrigName)) {
+      case ParamType::UNSIGNED:
+        Prefix = "u_";
+        break;
+      case ParamType::SIGNED:
+        Prefix = "s_";
+        break;
+      case ParamType::FLOAT:
+        Prefix = "f";
+        break;
+      default:
+        llvm_unreachable("unknown mangling!");
+      }
+      Found = GLSLExtOpMap::rfind(Prefix + DemangledName, &EGLSL);
+    }
+    if (Found)
+      return EGLSL;
+    else
+      return ~0U;
   }
-  if (Found)
-    return EOC;
-  else
-    return ~0U;
+  llvm_unreachable("invalid ext set");
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -956,6 +1004,24 @@ getOCLOpaqueTypeAddrSpace(SPIR::TypePrimitiveEnum Prim) {
   case SPIR::PRIMITIVE_IMAGE2D_MSAA_DEPTH_RW_T:
   case SPIR::PRIMITIVE_IMAGE2D_ARRAY_MSAA_DEPTH_RW_T:
   case SPIR::PRIMITIVE_IMAGE3D_RW_T:
+  // --> for libfloor Vulkan/OpenCL
+  case SPIR::PRIMITIVE_IMAGE_1D_T:
+  case SPIR::PRIMITIVE_IMAGE_1D_ARRAY_T:
+  case SPIR::PRIMITIVE_IMAGE_1D_BUFFER_T:
+  case SPIR::PRIMITIVE_IMAGE_2D_T:
+  case SPIR::PRIMITIVE_IMAGE_2D_ARRAY_T:
+  case SPIR::PRIMITIVE_IMAGE_3D_T:
+  case SPIR::PRIMITIVE_IMAGE_2D_MSAA_T:
+  case SPIR::PRIMITIVE_IMAGE_2D_ARRAY_MSAA_T:
+  case SPIR::PRIMITIVE_IMAGE_2D_MSAA_DEPTH_T:
+  case SPIR::PRIMITIVE_IMAGE_2D_ARRAY_MSAA_DEPTH_T:
+  case SPIR::PRIMITIVE_IMAGE_2D_DEPTH_T:
+  case SPIR::PRIMITIVE_IMAGE_2D_ARRAY_DEPTH_T:
+  case SPIR::PRIMITIVE_IMAGE_CUBE_T:
+  case SPIR::PRIMITIVE_IMAGE_CUBE_ARRAY_T:
+  case SPIR::PRIMITIVE_IMAGE_CUBE_DEPTH_T:
+  case SPIR::PRIMITIVE_IMAGE_CUBE_ARRAY_DEPTH_T:
+  // <-- for libfloor Vulkan/OpenCL
     return mapAddrSpaceEnums(SPIRV_IMAGE_ADDR_SPACE);
   default:
     llvm_unreachable("No address space is determined for a SPIR primitive");

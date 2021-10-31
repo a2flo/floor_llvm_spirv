@@ -111,6 +111,10 @@ void OCLTypeToSPIRVBase::addAdaptedType(Value *V, Type *T) {
   AdaptedTy[V] = T;
 }
 
+void OCLTypeToSPIRVBase::addAdaptedType(Argument &A, Type *T) {
+  addAdaptedType(&A, T);
+}
+
 void OCLTypeToSPIRVBase::addWork(Function *F) {
   LLVM_DEBUG(dbgs() << "[add work] "; F->printAsOperand(dbgs(), true, M);
              dbgs() << '\n');

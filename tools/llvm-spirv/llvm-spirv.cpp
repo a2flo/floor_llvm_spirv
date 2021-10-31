@@ -105,7 +105,8 @@ static cl::opt<VersionNumber> MaxSPIRVVersion(
                clEnumValN(VersionNumber::SPIRV_1_1, "1.1", "SPIR-V 1.1"),
                clEnumValN(VersionNumber::SPIRV_1_2, "1.2", "SPIR-V 1.2"),
                clEnumValN(VersionNumber::SPIRV_1_3, "1.3", "SPIR-V 1.3"),
-               clEnumValN(VersionNumber::SPIRV_1_4, "1.4", "SPIR-V 1.4")),
+               clEnumValN(VersionNumber::SPIRV_1_4, "1.4", "SPIR-V 1.4"),
+               clEnumValN(VersionNumber::SPIRV_1_5, "1.5", "SPIR-V 1.5")),
     cl::init(VersionNumber::MaximumVersion));
 
 static cl::list<std::string>
@@ -249,10 +250,11 @@ static int convertLLVMToSPIRV(const SPIRV::TranslatorOpts &Opts) {
   std::string Err;
   bool Success = false;
   if (OutputFile != "-") {
-    std::ofstream OutFile(OutputFile, std::ios::binary);
+    std::error_code EC {};
+    raw_fd_ostream OutFile(OutputFile, EC);
     Success = writeSpirv(M.get(), Opts, OutFile, Err);
   } else {
-    Success = writeSpirv(M.get(), Opts, std::cout, Err);
+    Success = writeSpirv(M.get(), Opts, llvm::outs(), Err);
   }
 
   if (!Success) {
@@ -323,7 +325,7 @@ static int convertSPIRV() {
     }
   }
 
-  auto Action = [&](std::ostream &OFS) {
+  auto Action = [&](llvm::raw_ostream &OFS) {
     std::string Err;
     if (!SPIRV::convertSpirv(IFS, OFS, Err, ToBinary, ToText)) {
       errs() << "Fails to convert SPIR-V : " << Err << '\n';
@@ -333,16 +335,18 @@ static int convertSPIRV() {
   };
 
   if (OutputFile == "-")
-    return Action(std::cout);
+    return Action(llvm::outs());
 
   // Open the output file in binary mode in case we convert text to SPIRV binary
   if (ToBinary) {
-    std::ofstream OFS(OutputFile, std::ios::binary);
+    std::error_code EC;
+    llvm::raw_fd_ostream OFS(OutputFile, EC);
     return Action(OFS);
   }
 
   // Convert SPIRV binary to text
-  std::ofstream OFS(OutputFile);
+  std::error_code EC;
+  llvm::raw_fd_ostream OFS(OutputFile, EC);
   return Action(OFS);
 }
 #endif

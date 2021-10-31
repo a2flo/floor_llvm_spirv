@@ -182,17 +182,30 @@ typedef SPIRVMap<Op, Op, IntBoolOpMapId> IntBoolOpMap;
   "-v128:128:128-v192:256:256-v256:256:256"                                    \
   "-v512:512:512-v1024:1024:1024"
 
+// NOTE: modify VulkanFinal pass and clang Targets when this changes
 enum SPIRAddressSpace {
-  SPIRAS_Private,
-  SPIRAS_Global,
-  SPIRAS_Constant,
-  SPIRAS_Local,
-  SPIRAS_Generic,
-  SPIRAS_GlobalDevice,
-  SPIRAS_GlobalHost,
-  SPIRAS_Input,
-  SPIRAS_Output,
-  SPIRAS_Count,
+  SPIRAS_Private = 0,
+  SPIRAS_Global = 1,
+  SPIRAS_Constant = 2,
+  SPIRAS_Local = 3,
+  SPIRAS_Generic = 4,
+  // OpenCL
+  SPIRAS_GlobalDevice = 100,
+  SPIRAS_GlobalHost = 101,
+  // Vulkan/GLSL specific ones
+  SPIRAS_Uniform = 5,
+  SPIRAS_Input = 6,
+  SPIRAS_Output = 7,
+  SPIRAS_VulkanPrivate = 8, // != SPIRAS_Private
+  SPIRAS_PushConstant = 9,
+  SPIRAS_AtomicCounter = 10,
+  SPIRAS_Image = 11,
+  SPIRAS_StorageBuffer = 12,
+  // Workgroup == SPIRAS_Local
+  // CrossWorkgroup == SPIRAS_Global
+  // Function = SPIRAS_Private
+  // UniformConstant = SPIRAS_Constant
+  SPIRAS_PhysicalStorageBuffer = 5349,
 };
 
 template <> inline void SPIRVMap<SPIRAddressSpace, std::string>::init() {
@@ -201,9 +214,17 @@ template <> inline void SPIRVMap<SPIRAddressSpace, std::string>::init() {
   add(SPIRAS_Constant, "Constant");
   add(SPIRAS_Local, "Local");
   add(SPIRAS_Generic, "Generic");
-  add(SPIRAS_Input, "Input");
   add(SPIRAS_GlobalDevice, "GlobalDevice");
   add(SPIRAS_GlobalHost, "GlobalHost");
+  add(SPIRAS_Uniform, "Uniform");
+  add(SPIRAS_Input, "Input");
+  add(SPIRAS_Output, "Output");
+  add(SPIRAS_VulkanPrivate, "Private");
+  add(SPIRAS_PushConstant, "PushConstant");
+  add(SPIRAS_AtomicCounter, "AtomicCounter");
+  add(SPIRAS_Image, "Image");
+  add(SPIRAS_StorageBuffer, "StorageBuffer");
+  add(SPIRAS_PhysicalStorageBuffer, "PhysicalStorageBuffer");
 }
 typedef SPIRVMap<SPIRAddressSpace, SPIRVStorageClassKind>
     SPIRAddrSpaceCapitalizedNameMap;
@@ -215,9 +236,17 @@ inline void SPIRVMap<SPIRAddressSpace, SPIRVStorageClassKind>::init() {
   add(SPIRAS_Constant, StorageClassUniformConstant);
   add(SPIRAS_Local, StorageClassWorkgroup);
   add(SPIRAS_Generic, StorageClassGeneric);
-  add(SPIRAS_Input, StorageClassInput);
   add(SPIRAS_GlobalDevice, StorageClassDeviceOnlyINTEL);
   add(SPIRAS_GlobalHost, StorageClassHostOnlyINTEL);
+  add(SPIRAS_Uniform, StorageClassUniform);
+  add(SPIRAS_Input, StorageClassInput);
+  add(SPIRAS_Output, StorageClassOutput);
+  add(SPIRAS_VulkanPrivate, StorageClassPrivate);
+  add(SPIRAS_PushConstant, StorageClassPushConstant);
+  add(SPIRAS_AtomicCounter, StorageClassAtomicCounter);
+  add(SPIRAS_Image, StorageClassImage);
+  add(SPIRAS_StorageBuffer, StorageClassStorageBuffer);
+  add(SPIRAS_PhysicalStorageBuffer, StorageClassPhysicalStorageBuffer);
 }
 typedef SPIRVMap<SPIRAddressSpace, SPIRVStorageClassKind> SPIRSPIRVAddrSpaceMap;
 
@@ -227,6 +256,7 @@ inline void SPIRVMap<std::string, SPIRVAccessQualifierKind>::init() {
   add("read_only", AccessQualifierReadOnly);
   add("write_only", AccessQualifierWriteOnly);
   add("read_write", AccessQualifierReadWrite);
+  add("", AccessQualifierNone);
 }
 typedef SPIRVMap<std::string, SPIRVAccessQualifierKind>
     SPIRSPIRVAccessQualifierMap;
@@ -261,6 +291,7 @@ template <>
 inline void
 SPIRVMap<SPIRVExtInstSetKind, std::string, SPIRVExtSetShortName>::init() {
   add(SPIRVEIS_OpenCL, "ocl");
+  add(SPIRVEIS_GLSL, "glsl");
 }
 typedef SPIRVMap<SPIRVExtInstSetKind, std::string, SPIRVExtSetShortName>
     SPIRVExtSetShortNameMap;
@@ -912,9 +943,10 @@ std::string getSPIRVImageSampledTypeName(SPIRVType *Ty);
 /// E.g. %opencl.image1d_rw_t -> %spirv.Image._void_0_0_0_0_0_0_2
 Type *getSPIRVImageTypeFromOCL(Module *M, Type *T);
 
-/// Get LLVM type for sampled type of SPIR-V image type by postfix.
-Type *getLLVMTypeForSPIRVImageSampledTypePostfix(StringRef Postfix,
-                                                 LLVMContext &Ctx);
+/// Translates GLSL image type names to SPIR-V.
+Type *getSPIRVImageTypeFromGLSL(Module *M, Type *T, const char *sample_type,
+                                const bool is_storage,
+                                const spv::ImageFormat format);
 
 /// Return the unqualified and unsuffixed base name of an image type.
 /// E.g. opencl.image2d_ro_t.3 -> image2d_t
@@ -976,6 +1008,10 @@ std::string mangleBuiltin(StringRef UniqName, ArrayRef<Type *> ArgTypes,
 /// Mangle a function from OpenCL extended instruction set in SPIR-V friendly IR
 /// manner
 std::string getSPIRVFriendlyIRFunctionName(OCLExtOpKind ExtOpId,
+                                           ArrayRef<Type *> ArgTys,
+                                           Type *RetTy = nullptr);
+
+std::string getSPIRVFriendlyIRFunctionName(GLSLExtOpKind ExtOpId,
                                            ArrayRef<Type *> ArgTys,
                                            Type *RetTy = nullptr);
 

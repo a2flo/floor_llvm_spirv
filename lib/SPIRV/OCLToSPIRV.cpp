@@ -41,6 +41,8 @@
 #include "OCLTypeToSPIRV.h"
 #include "OCLUtil.h"
 #include "SPIRVInternal.h"
+#include "SPIRVFunction.h"
+#include "SPIRVInstruction.h"
 #include "libSPIRV/SPIRVDebug.h"
 
 #include "llvm/ADT/StringSwitch.h"
@@ -190,12 +192,18 @@ public:
   ///   return __spirv_ImageSampleExplicitLod_R{ReturnType}(sampled_image, ...);
   void visitCallReadImageWithSampler(CallInst *CI, StringRef MangledName);
 
+  void visitCallReadImageWithSamplerShader(CallInst *CI, StringRef MangledName,
+                                           const std::string &DemangledName);
+
   /// Transform read_image with msaa image arguments.
   /// Sample argument must be acoded as Image Operand.
   void visitCallReadImageMSAA(CallInst *CI, StringRef MangledName);
 
   /// Transform {read|write}_image without sampler arguments.
   void visitCallReadWriteImage(CallInst *CI, StringRef DemangledName);
+
+  void visitCallWriteImageShader(CallInst *CI, StringRef MangledName,
+                                 const std::string &DemangledName);
 
   /// Transform to_{global|local|private}.
   ///
@@ -269,6 +277,7 @@ private:
   Module *M;
   LLVMContext *Ctx;
   unsigned CLVer; /// OpenCL version as major*10+minor
+  spv::SourceLanguage SrcLang;
   std::set<Value *> ValuesToDelete;
   OCLTypeToSPIRVBase *OCLTypeToSPIRVPtr;
 
@@ -353,16 +362,37 @@ bool OCLToSPIRVBase::runOCLToSPIRV(Module &Module) {
   M = &Module;
   Ctx = &M->getContext();
   auto Src = getSPIRVSource(&Module);
+  SrcLang = (spv::SourceLanguage)std::get<0>(Src);
   // This is a pre-processing pass, which transform LLVM IR module to a more
-  // suitable form for the SPIR-V translation: it is specifically designed to
-  // handle OpenCL C built-in functions and shouldn't be launched for other
-  // source languages
-  if (std::get<0>(Src) != spv::SourceLanguageOpenCL_C)
+  // suitable form for the SPIR-V translation
+  if (SrcLang != spv::SourceLanguageOpenCL_C &&
+      SrcLang != spv::SourceLanguageGLSL)
     return false;
 
   CLVer = std::get<1>(Src);
 
   LLVM_DEBUG(dbgs() << "Enter OCLToSPIRV:\n");
+
+#if 0 // TODO: apply these to latest repo changes
+  // language specific handling
+  if (SrcLang == spv::SourceLanguageGLSL) {
+    // as of now, Vulkan/SPIR-V/GLSL doesn't know constant/UniformConstant
+    // values/object, so replace all uses of the constant address space with the
+    // Function storage class
+    // NOTE: SPIRVWriter will also move all global constant vars to the inside
+    // of their respective functions (users)
+    SPIRSPIRVAddrSpaceMap::replace(SPIRAS_Constant, StorageClassFunction);
+
+    // add shader image caps
+    SPIRVImageInstBase::addCap(spv::CapabilityShader);
+    SPIRVImageQueryInstBase::addCap(spv::CapabilityImageQuery);
+  } else {
+    // set kernel image caps
+    SPIRVImageInstBase::addCap(spv::CapabilityImageBasic);
+  }
+
+  transWorkItemBuiltinsToVariables();
+#endif
 
   visit(*M);
 
@@ -417,8 +447,10 @@ void OCLToSPIRVBase::visitCallInst(CallInst &CI) {
       DemangledName.find(kOCLBuiltinName::AtomPrefix) == 0) {
 
     // Compute atomic builtins do not support floating types.
+    // NOTE: allowing this for Vulkan
     if (CI.getType()->isFloatingPointTy() &&
-        isComputeAtomicOCLBuiltin(DemangledName))
+        isComputeAtomicOCLBuiltin(DemangledName) &&
+        SrcLang != spv::SourceLanguageGLSL)
       return;
 
     auto PCI = &CI;
@@ -470,7 +502,11 @@ void OCLToSPIRVBase::visitCallInst(CallInst &CI) {
   }
   if (DemangledName.find(kOCLBuiltinName::ReadImage) == 0) {
     if (MangledName.find(kMangledName::Sampler) != StringRef::npos) {
-      visitCallReadImageWithSampler(&CI, MangledName);
+      if (SrcLang != spv::SourceLanguageGLSL) {
+        visitCallReadImageWithSampler(&CI, MangledName);
+      } else {
+        visitCallReadImageWithSamplerShader(&CI, MangledName, DemangledName.str());
+      }
       return;
     }
     if (MangledName.find("msaa") != StringRef::npos) {
@@ -480,7 +516,12 @@ void OCLToSPIRVBase::visitCallInst(CallInst &CI) {
   }
   if (DemangledName.find(kOCLBuiltinName::ReadImage) == 0 ||
       DemangledName.find(kOCLBuiltinName::WriteImage) == 0) {
-    visitCallReadWriteImage(&CI, DemangledName);
+    if (SrcLang != spv::SourceLanguageGLSL) {
+      visitCallReadWriteImage(&CI, DemangledName);
+    } else {
+      assert(DemangledName.find(kOCLBuiltinName::ReadImage) == std::string::npos && "should not be here");
+      visitCallWriteImageShader(&CI, MangledName, DemangledName.str());
+    }
     return;
   }
   if (DemangledName == kOCLBuiltinName::ToGlobal ||
@@ -519,6 +560,7 @@ void OCLToSPIRVBase::visitCallInst(CallInst &CI) {
   }
   if (DemangledName == kOCLBuiltinName::FMin ||
       DemangledName == kOCLBuiltinName::FMax ||
+      DemangledName == kOCLBuiltinName::FMod ||
       DemangledName == kOCLBuiltinName::Min ||
       DemangledName == kOCLBuiltinName::Max ||
       DemangledName == kOCLBuiltinName::Step ||
@@ -836,10 +878,23 @@ void OCLToSPIRVBase::transAtomicBuiltin(CallInst *CI,
       M, CI,
       [=](CallInst *CI, std::vector<Value *> &Args) -> std::string {
         Info.PostProc(Args);
+
+        // rename atomic functions if necessary
+        std::string atom_func_name = Info.UniqName;
+        if (CI->getCalledFunction()->getReturnType()->isFloatTy()) {
+          if (atom_func_name == "atom_add") {
+            atom_func_name = "atom_fadd";
+          } else if (atom_func_name == "atomic_add") {
+            atom_func_name = "atomic_fadd";
+          } else if (atom_func_name == "atomic_fetch_add_explicit") {
+            atom_func_name = "atomic_fetch_fadd_explicit";
+          }
+        }
+
         // Order of args in OCL20:
         // object, 0-2 other args, 1-2 order, scope
         const size_t NumOrder =
-            getAtomicBuiltinNumMemoryOrderArgs(Info.UniqName);
+            getAtomicBuiltinNumMemoryOrderArgs(atom_func_name);
         const size_t ArgsCount = Args.size();
         const size_t ScopeIdx = ArgsCount - 1;
         const size_t OrderIdx = ScopeIdx - NumOrder;
@@ -848,8 +903,46 @@ void OCLToSPIRVBase::transAtomicBuiltin(CallInst *CI,
             transOCLMemScopeIntoSPIRVScope(Args[ScopeIdx], OCLMS_device, CI);
 
         for (size_t I = 0; I < NumOrder; ++I) {
-          Args[OrderIdx + I] = transOCLMemOrderIntoSPIRVMemorySemantics(
-              Args[OrderIdx + I], OCLMO_seq_cst, CI);
+          if (SrcLang == spv::SourceLanguageGLSL) {
+            Args[OrderIdx + I] = mapUInt(M, cast<ConstantInt>(Args[OrderIdx + I]),
+              [&Args, this](unsigned Ord) {
+                // add Vulkan/GLSL specific memory semantics
+                spv::MemorySemanticsMask memsem = spv::MemorySemanticsMaskNone;
+                if (SrcLang == spv::SourceLanguageGLSL) {
+                  switch (
+                      SPIRSPIRVAddrSpaceMap::map(static_cast<SPIRAddressSpace>(
+                          Args[0]->getType()->getPointerAddressSpace()))) {
+                  case spv::StorageClassUniform:
+                    memsem = spv::MemorySemanticsUniformMemoryMask;
+                    break;
+                  // TODO: no sub-group storage class? handled differently?
+                  case spv::StorageClassWorkgroup:
+                    memsem = spv::MemorySemanticsWorkgroupMemoryMask;
+                    break;
+                  case spv::StorageClassStorageBuffer:
+                  case spv::StorageClassCrossWorkgroup:
+                    memsem = spv::MemorySemanticsCrossWorkgroupMemoryMask;
+                    break;
+                  case spv::StorageClassAtomicCounter:
+                    memsem = spv::MemorySemanticsAtomicCounterMemoryMask;
+                    break;
+                  case spv::StorageClassImage:
+                    memsem = spv::MemorySemanticsImageMemoryMask;
+                    break;
+                  default:
+                    break;
+                  }
+                  // SequentiallyConsistent memory order is not supported -> use AcquireRelease
+                  if (Ord == OCLMO_seq_cst) {
+                    Ord = OCLMO_acq_rel;
+                  }
+                }
+                return mapOCLMemSemanticToSPIRV(0, static_cast<OCLMemOrderKind>(Ord)) | memsem;
+              });
+          } else {
+            Args[OrderIdx + I] = transOCLMemOrderIntoSPIRVMemorySemantics(
+                Args[OrderIdx + I], OCLMO_seq_cst, CI);
+          }
         }
         // Order of args in SPIR-V:
         // object, scope, 1-2 order, 0-2 other args
@@ -859,7 +952,7 @@ void OCLToSPIRVBase::transAtomicBuiltin(CallInst *CI,
           // argument just where it should be, so don't move the last argument
           // then.
           int Offset =
-              Info.UniqName.find("atomic_compare_exchange") == 0 ? 1 : 0;
+              atom_func_name.find("atomic_compare_exchange") == 0 ? 1 : 0;
           std::rotate(Args.begin() + 2, Args.begin() + OrderIdx,
                       Args.end() - Offset);
         }
@@ -870,7 +963,7 @@ void OCLToSPIRVBase::transAtomicBuiltin(CallInst *CI,
                  ReturnType->isDoubleTy();
         };
         auto SPIRVFunctionName =
-            getSPIRVFuncName(OCLSPIRVBuiltinMap::map(Info.UniqName));
+            getSPIRVFuncName(OCLSPIRVBuiltinMap::map(atom_func_name));
         if (!IsFPType(AtomicBuiltinsReturnType))
           return SPIRVFunctionName;
         // Translate FP-typed atomic builtins. Currently we only need to
@@ -904,7 +997,9 @@ void OCLToSPIRVBase::visitCallBarrier(CallInst *CI) {
         // But if the flags argument is set to 0, we use
         // None(Relaxed) memory order.
         unsigned MemFenceFlag = std::get<0>(Lit);
-        OCLMemOrderKind MemOrder = MemFenceFlag ? OCLMO_seq_cst : OCLMO_relaxed;
+        // NOTE: we can not use OCLMO_seq_cst with Vulkan memory model
+        OCLMemOrderKind MemOrder = MemFenceFlag && SrcLang != spv::SourceLanguageGLSL ?
+            OCLMO_seq_cst : OCLMO_relaxed;
         Args[2] = addInt32(mapOCLMemSemanticToSPIRV(
             MemFenceFlag, MemOrder)); // Memory semantics
         return getSPIRVFuncName(OpControlBarrier);
@@ -1078,6 +1173,9 @@ void OCLToSPIRVBase::transBuiltin(CallInst *CI, OCLBuiltinTransInfo &Info) {
   Op OC = OpNop;
   unsigned ExtOp = ~0U;
   SPIRVBuiltinVariableKind BVKind = BuiltInMax;
+  const auto ext_kind =
+      (SrcLang == spv::SourceLanguageOpenCL_C ? SPIRVEIS_OpenCL
+                                              : SPIRVEIS_GLSL);
   if (StringRef(Info.UniqName).startswith(kSPIRVName::Prefix))
     return;
   if (OCLSPIRVBuiltinMap::find(Info.UniqName, &OC)) {
@@ -1096,8 +1194,8 @@ void OCLToSPIRVBase::transBuiltin(CallInst *CI, OCLBuiltinTransInfo &Info) {
     } else {
       Info.UniqName = getSPIRVFuncName(OC);
     }
-  } else if ((ExtOp = getExtOp(Info.MangledName, Info.UniqName)) != ~0U)
-    Info.UniqName = getSPIRVExtFuncName(SPIRVEIS_OpenCL, ExtOp);
+  } else if ((ExtOp = getExtOp(Info.MangledName, Info.UniqName, ext_kind)) != ~0U)
+    Info.UniqName = getSPIRVExtFuncName(ext_kind, ExtOp);
   else if (SPIRSPIRVBuiltinVariableMap::find(Info.UniqName, &BVKind)) {
     // Map OCL work item builtins to SPV-IR work item builtins.
     // e.g. get_global_id() --> __spirv_BuiltinGlobalInvocationId()
@@ -1201,6 +1299,12 @@ void OCLToSPIRVBase::visitCallReadImageWithSampler(CallInst *CI,
       &Attrs);
 }
 
+void OCLToSPIRVBase::visitCallReadImageWithSamplerShader(
+    CallInst *CI, StringRef MangledName, const std::string &DemangledName) {
+  // NOTE: we'll be handling this in SPIRVWriter, not here, because we need
+  // information that is only available there
+}
+
 void OCLToSPIRVBase::visitCallGetImageSize(CallInst *CI,
                                            StringRef DemangledName) {
   AttributeList Attrs = CI->getCalledFunction()->getAttributes();
@@ -1216,7 +1320,7 @@ void OCLToSPIRVBase::visitCallGetImageSize(CallInst *CI,
   mutateCallInstSPIRV(
       M, CI,
       [&](CallInst *, std::vector<Value *> &Args, Type *&Ret) {
-        assert(Args.size() == 1);
+        assert(Args.size() == 1 || (Args.size() == 2 && SrcLang == spv::SourceLanguageGLSL));
         Ret = CI->getType()->isIntegerTy(64) ? Type::getInt64Ty(*Ctx)
                                              : Type::getInt32Ty(*Ctx);
         if (Dim > 1)
@@ -1224,7 +1328,9 @@ void OCLToSPIRVBase::visitCallGetImageSize(CallInst *CI,
         if (Desc.Dim == DimBuffer)
           return getSPIRVFuncName(OpImageQuerySize, CI->getType());
         else {
-          Args.push_back(getInt32(M, 0));
+          if (Args.size() == 1) {
+            Args.push_back(getInt32(M, 0));
+          }
           return getSPIRVFuncName(OpImageQuerySizeLod, CI->getType());
         }
       },
@@ -1314,6 +1420,13 @@ void OCLToSPIRVBase::visitCallReadWriteImage(CallInst *CI,
   }
 
   transBuiltin(CI, Info);
+}
+
+void OCLToSPIRVBase::visitCallWriteImageShader(CallInst *CI,
+                                               StringRef MangledName,
+                                               const std::string &DemangledName) {
+  // NOTE: we'll be handling this in SPIRVWriter, not here, because we need
+  // information that is only available there
 }
 
 void OCLToSPIRVBase::visitCallToAddr(CallInst *CI, StringRef DemangledName) {
@@ -1457,6 +1570,7 @@ void OCLToSPIRVBase::visitCallScalToVec(CallInst *CI, StringRef MangledName,
   std::vector<unsigned int> ScalarPos;
   if (DemangledName == kOCLBuiltinName::FMin ||
       DemangledName == kOCLBuiltinName::FMax ||
+      DemangledName == kOCLBuiltinName::FMod ||
       DemangledName == kOCLBuiltinName::Min ||
       DemangledName == kOCLBuiltinName::Max) {
     VecPos.push_back(0);
@@ -1479,6 +1593,9 @@ void OCLToSPIRVBase::visitCallScalToVec(CallInst *CI, StringRef MangledName,
   }
 
   AttributeList Attrs = CI->getCalledFunction()->getAttributes();
+  const auto ext_kind =
+      (SrcLang == spv::SourceLanguageOpenCL_C ? SPIRVEIS_OpenCL
+                                              : SPIRVEIS_GLSL);
   mutateCallInstSPIRV(
       M, CI,
       [=](CallInst *, std::vector<Value *> &Args) {
@@ -1499,8 +1616,8 @@ void OCLToSPIRVBase::visitCallScalToVec(CallInst *CI, StringRef MangledName,
 
           Args[I] = NewVec;
         }
-        return getSPIRVExtFuncName(SPIRVEIS_OpenCL,
-                                   getExtOp(MangledName, DemangledName));
+        return getSPIRVExtFuncName(ext_kind,
+                                   getExtOp(MangledName, DemangledName, ext_kind));
       },
       &Attrs);
 }
@@ -1583,7 +1700,7 @@ void OCLToSPIRVBase::visitCallEnqueueKernel(CallInst *CI,
       FunctionType::get(CI->getType(), getTypes(Args), false /*isVarArg*/);
   Function *NewF =
       Function::Create(FT, GlobalValue::ExternalLinkage, NewName, M);
-  NewF->setCallingConv(CallingConv::SPIR_FUNC);
+  NewF->setCallingConv(CallingConv::FLOOR_FUNC);
   CallInst *NewCall = CallInst::Create(NewF, Args, "", CI);
   NewCall->setCallingConv(NewF->getCallingConv());
   CI->replaceAllUsesWith(NewCall);
@@ -1886,9 +2003,9 @@ void OCLToSPIRVBase::visitSubgroupAVCBuiltinCallWithSampler(
 } // namespace SPIRV
 
 INITIALIZE_PASS_BEGIN(OCLToSPIRVLegacy, "ocl-to-spv",
-                      "Transform OCL 2.0 to SPIR-V", false, false)
+                      "Transform OCL 2.0 / GLSL to SPIR-V", false, false)
 INITIALIZE_PASS_DEPENDENCY(OCLTypeToSPIRVLegacy)
 INITIALIZE_PASS_END(OCLToSPIRVLegacy, "ocl-to-spv",
-                    "Transform OCL 2.0 to SPIR-V", false, false)
+                    "Transform OCL 2.0 / GLSL to SPIR-V", false, false)
 
 ModulePass *llvm::createOCLToSPIRVLegacy() { return new OCLToSPIRVLegacy(); }

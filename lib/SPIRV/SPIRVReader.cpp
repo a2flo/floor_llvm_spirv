@@ -2232,7 +2232,7 @@ Value *SPIRVToLLVM::transValueWithoutDecoration(SPIRVValue *BV, Function *F,
         cast<FunctionType>(V->getType()->getPointerElementType()), V,
         transValue(BC->getArgumentValues(), F, BB), BC->getName(), BB);
     // Assuming we are calling a regular device function
-    Call->setCallingConv(CallingConv::SPIR_FUNC);
+    Call->setCallingConv(CallingConv::FLOOR_FUNC);
     // Don't set attributes, because at translation time we don't know which
     // function exactly we are calling.
     return mapValue(BV, Call);
@@ -2556,7 +2556,7 @@ CallInst *SPIRVToLLVM::transFixedPointInst(SPIRVInstruction *BI,
   FunctionCallee FCallee = M->getOrInsertFunction(FuncName, FT);
 
   auto *Fn = cast<Function>(FCallee.getCallee());
-  Fn->setCallingConv(CallingConv::SPIR_FUNC);
+  Fn->setCallingConv(CallingConv::FLOOR_FUNC);
   if (isFuncNoUnwind())
     Fn->addFnAttr(Attribute::NoUnwind);
 
@@ -2683,7 +2683,7 @@ CallInst *SPIRVToLLVM::transArbFloatInst(SPIRVInstruction *BI, BasicBlock *BB,
   FunctionCallee FCallee = M->getOrInsertFunction(FuncName, FT);
 
   auto *Func = cast<Function>(FCallee.getCallee());
-  Func->setCallingConv(CallingConv::SPIR_FUNC);
+  Func->setCallingConv(CallingConv::FLOOR_FUNC);
   if (isFuncNoUnwind())
     Func->addFnAttr(Attribute::NoUnwind);
 
@@ -2729,8 +2729,8 @@ Function *SPIRVToLLVM::transFunction(SPIRVFunction *BF) {
   if (F->isIntrinsic())
     return F;
 
-  F->setCallingConv(IsKernel ? CallingConv::SPIR_KERNEL
-                             : CallingConv::SPIR_FUNC);
+  F->setCallingConv(IsKernel ? CallingConv::FLOOR_KERNEL
+                             : CallingConv::FLOOR_FUNC);
   if (BF->hasDecorate(DecorationReferencedIndirectlyINTEL))
     F->addFnAttr("referenced-indirectly");
   if (isFuncNoUnwind())
@@ -3056,7 +3056,7 @@ Instruction *SPIRVToLLVM::transBuiltinFromInst(const std::string &FuncName,
   if (!Func || Func->getFunctionType() != FT) {
     LLVM_DEBUG(for (auto &I : ArgTys) { dbgs() << *I << '\n'; });
     Func = Function::Create(FT, GlobalValue::ExternalLinkage, MangledName, M);
-    Func->setCallingConv(CallingConv::SPIR_FUNC);
+    Func->setCallingConv(CallingConv::FLOOR_FUNC);
     if (isFuncNoUnwind())
       Func->addFnAttr(Attribute::NoUnwind);
     auto OC = BI->getOpCode();
@@ -3089,7 +3089,6 @@ std::string getSPIRVFuncSuffix(SPIRVInstruction *BI) {
            "Invalid type of CreatePipeFromStorage");
     auto PipeType = static_cast<SPIRVTypePipe *>(CPFPS->getType());
     switch (PipeType->getAccessQualifier()) {
-    default:
     case AccessQualifierReadOnly:
       Suffix = "_read";
       break;
@@ -3098,6 +3097,8 @@ std::string getSPIRVFuncSuffix(SPIRVInstruction *BI) {
       break;
     case AccessQualifierReadWrite:
       Suffix = "_read_write";
+      break;
+    case AccessQualifierNone:
       break;
     }
   }
@@ -3245,20 +3246,19 @@ bool SPIRVToLLVM::transAddressingModel() {
   case AddressingModelPhysical64:
     M->setTargetTriple(SPIR_TARGETTRIPLE64);
     M->setDataLayout(SPIR_DATALAYOUT64);
-    break;
+    return true;
   case AddressingModelPhysical32:
     M->setTargetTriple(SPIR_TARGETTRIPLE32);
     M->setDataLayout(SPIR_DATALAYOUT32);
-    break;
+    return true;
   case AddressingModelLogical:
+  case AddressingModelPhysicalStorageBuffer64:
     // Do not set target triple and data layout
-    break;
+    return true;
   default:
-    SPIRVCKRT(0, InvalidAddressingModel,
-              "Actual addressing mode is " +
-                  std::to_string(BM->getAddressingModel()));
+    break;
   }
-  return true;
+  llvm_unreachable("invalid addressing model");
 }
 
 void generateIntelFPGAAnnotation(const SPIRVEntry *E,
@@ -3728,7 +3728,7 @@ bool SPIRVToLLVM::transMetadata() {
         BF->getExecutionMode(internal::ExecutionModeFastCompositeKernelINTEL))
       F->addFnAttr(kVCMetadata::VCFCEntry);
 
-    if (F->getCallingConv() != CallingConv::SPIR_KERNEL)
+    if (F->getCallingConv() != CallingConv::FLOOR_KERNEL)
       continue;
 
     // Generate metadata for reqd_work_group_size
@@ -3819,7 +3819,7 @@ bool SPIRVToLLVM::transMetadata() {
 bool SPIRVToLLVM::transOCLMetadata(SPIRVFunction *BF) {
   Function *F = static_cast<Function *>(getTranslatedValue(BF));
   assert(F && "Invalid translated function");
-  if (F->getCallingConv() != CallingConv::SPIR_KERNEL)
+  if (F->getCallingConv() != CallingConv::FLOOR_KERNEL)
     return true;
 
   if (BF->hasDecorate(DecorationVectorComputeFunctionINTEL))
@@ -4138,16 +4138,26 @@ bool SPIRVToLLVM::transAlign(SPIRVValue *BV, Value *V) {
 Instruction *SPIRVToLLVM::transOCLBuiltinFromExtInst(SPIRVExtInst *BC,
                                                      BasicBlock *BB) {
   assert(BB && "Invalid BB");
-  auto ExtOp = static_cast<OCLExtOpKind>(BC->getExtOp());
-  std::string UnmangledName = OCLExtOpMap::map(ExtOp);
 
-  assert(BM->getBuiltinSet(BC->getExtSetId()) == SPIRVEIS_OpenCL &&
-         "Not OpenCL extended instruction");
+  const auto ext_kind = BM->getBuiltinSet(BC->getExtSetId());
+  assert((ext_kind == SPIRVEIS_OpenCL || ext_kind == SPIRVEIS_GLSL) &&
+         "Not OpenCL or GLSL extended instruction");
 
   std::vector<Type *> ArgTypes = transTypeVector(BC->getArgTypes());
   Type *RetTy = transType(BC->getType());
-  std::string MangledName =
-      getSPIRVFriendlyIRFunctionName(ExtOp, ArgTypes, RetTy);
+
+  std::string UnmangledName, MangledName;
+  if (ext_kind == SPIRVEIS_OpenCL) {
+    auto CLExtOp = static_cast<OCLExtOpKind>(BC->getExtOp());
+    UnmangledName = OCLExtOpMap::map(CLExtOp);
+    MangledName = getSPIRVFriendlyIRFunctionName(CLExtOp, ArgTypes, RetTy);
+  } else if (ext_kind == SPIRVEIS_GLSL) {
+    auto GLSLExtOp = static_cast<GLSLExtOpKind>(BC->getExtOp());
+    UnmangledName = GLSLExtOpMap::map(GLSLExtOp);
+    MangledName = getSPIRVFriendlyIRFunctionName(GLSLExtOp, ArgTypes, RetTy);
+  } else {
+    llvm_unreachable("invalid extension kind");
+  }
 
   SPIRVDBG(spvdbgs() << "[transOCLBuiltinFromExtInst] UnmangledName: "
                      << UnmangledName << " MangledName: " << MangledName
@@ -4157,7 +4167,7 @@ Instruction *SPIRVToLLVM::transOCLBuiltinFromExtInst(SPIRVExtInst *BC,
   Function *F = M->getFunction(MangledName);
   if (!F) {
     F = Function::Create(FT, GlobalValue::ExternalLinkage, MangledName, M);
-    F->setCallingConv(CallingConv::SPIR_FUNC);
+    F->setCallingConv(CallingConv::FLOOR_FUNC);
     if (isFuncNoUnwind())
       F->addFnAttr(Attribute::NoUnwind);
     if (isFuncReadNone(UnmangledName))

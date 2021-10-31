@@ -42,6 +42,7 @@
 #define SPIRV_H
 
 #include "LLVMSPIRVOpts.h"
+#include "llvm/../../projects/spirv/lib/SPIRV/libSPIRV/SPIRVUtil.h"
 
 #include <iostream>
 #include <string>
@@ -51,6 +52,7 @@ namespace llvm {
 // PassSupport.h.
 class PassRegistry;
 void initializeLLVMToSPIRVLegacyPass(PassRegistry &);
+void initializeLLVMToSPIRVTransformationsPass(PassRegistry&);
 void initializeOCLToSPIRVLegacyPass(PassRegistry &);
 void initializeOCLTypeToSPIRVLegacyPass(PassRegistry &);
 void initializeSPIRVLowerBoolLegacyPass(PassRegistry &);
@@ -83,7 +85,7 @@ bool isSpirvBinary(const std::string &Img);
 /// This function is not thread safe and should not be used in multi-thread
 /// applications unless guarded by a critical section.
 /// \returns true if succeeds.
-bool convertSpirv(std::istream &IS, std::ostream &OS, std::string &ErrMsg,
+bool convertSpirv(std::istream &IS, spv_ostream &OS, std::string &ErrMsg,
                   bool FromText, bool ToText);
 
 /// \brief Convert SPIR-V between binary and internal text formats.
@@ -113,7 +115,7 @@ namespace llvm {
 
 /// \brief Translate LLVM module to SPIR-V and write to ostream.
 /// \returns true if succeeds.
-bool writeSpirv(Module *M, std::ostream &OS, std::string &ErrMsg);
+bool writeSpirv(Module *M, spv_ostream &OS, std::string &ErrMsg);
 
 /// \brief Load SPIR-V from istream and translate to LLVM module.
 /// \returns true if succeeds.
@@ -122,7 +124,7 @@ bool readSpirv(LLVMContext &C, std::istream &IS, Module *&M,
 
 /// \brief Translate LLVM module to SPIR-V and write to ostream.
 /// \returns true if succeeds.
-bool writeSpirv(Module *M, const SPIRV::TranslatorOpts &Opts, std::ostream &OS,
+bool writeSpirv(Module *M, const SPIRV::TranslatorOpts &Opts, spv_ostream &OS,
                 std::string &ErrMsg);
 
 /// \brief Load SPIR-V from istream and translate to LLVM module.
@@ -162,6 +164,10 @@ void mangleOpenClBuiltin(const std::string &UnmangledName,
 
 /// Create a pass for translating LLVM to SPIR-V.
 ModulePass *createLLVMToSPIRVLegacy(SPIRV::SPIRVModule *);
+
+/// Create a pass that transforms certain IR to constructs that are better, or
+/// more easily, representable in SPIR-V.
+ModulePass *createLLVMToSPIRVTransformations();
 
 /// Create a pass for translating OCL C builtin functions to SPIR-V builtin
 /// functions.

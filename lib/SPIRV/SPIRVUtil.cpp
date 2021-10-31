@@ -124,6 +124,9 @@ std::string mapLLVMTypeToOCLType(const Type *Ty, bool Signed) {
     if (!Signed)
       SignPrefix = "u";
     switch (IntTy->getIntegerBitWidth()) {
+    case 1:
+      Stem = "bool";
+      break;
     case 8:
       Stem = "char";
       break;
@@ -334,7 +337,7 @@ Function *getOrCreateFunction(Module *M, Type *RetTy, ArrayRef<Type *> ArgTypes,
     LLVM_DEBUG(dbgs() << "[getOrCreateFunction] ";
                if (F) dbgs() << *F << " => "; dbgs() << *NewF << '\n';);
     F = NewF;
-    F->setCallingConv(CallingConv::SPIR_FUNC);
+    F->setCallingConv(CallingConv::FLOOR_FUNC);
     if (Attrs)
       F->setAttributes(*Attrs);
   }
@@ -412,6 +415,9 @@ std::string getSPIRVExtFuncName(SPIRVExtInstSetKind Set, unsigned ExtOp,
     break;
   case SPIRVEIS_OpenCL:
     ExtOpName = getName(static_cast<OCLExtOpKind>(ExtOp));
+    break;
+  case SPIRVEIS_GLSL:
+    ExtOpName = getName(static_cast<GLSLExtOpKind>(ExtOp));
     break;
   }
   return prefixSPIRVName(SPIRVExtSetShortNameMap::map(Set) + '_' + ExtOpName +
@@ -985,6 +991,29 @@ SPIR::TypePrimitiveEnum getOCLTypePrimitiveEnum(StringRef TyName) {
       .Case("opencl.image2d_array_msaa_depth_rw_t",
             SPIR::PRIMITIVE_IMAGE2D_ARRAY_MSAA_DEPTH_RW_T)
       .Case("opencl.image3d_rw_t", SPIR::PRIMITIVE_IMAGE3D_RW_T)
+	  // --> for libfloor Vulkan/OpenCL
+      .Case("opencl.image1d_t", SPIR::PRIMITIVE_IMAGE_1D_T)
+      .Case("opencl.image1d_array_t", SPIR::PRIMITIVE_IMAGE_1D_ARRAY_T)
+      .Case("opencl.image1d_buffer_t", SPIR::PRIMITIVE_IMAGE_1D_BUFFER_T)
+      .Case("opencl.image2d_t", SPIR::PRIMITIVE_IMAGE_2D_T)
+      .Case("opencl.image2d_array_t", SPIR::PRIMITIVE_IMAGE_2D_ARRAY_T)
+      .Case("opencl.image3d_t", SPIR::PRIMITIVE_IMAGE_3D_T)
+      .Case("opencl.image2d_msaa_t", SPIR::PRIMITIVE_IMAGE_2D_MSAA_T)
+      .Case("opencl.image2d_array_msaa_t",
+            SPIR::PRIMITIVE_IMAGE_2D_ARRAY_MSAA_T)
+      .Case("opencl.image2d_msaa_depth_t",
+            SPIR::PRIMITIVE_IMAGE_2D_MSAA_DEPTH_T)
+      .Case("opencl.image2d_array_msaa_depth_t",
+            SPIR::PRIMITIVE_IMAGE_2D_ARRAY_MSAA_DEPTH_T)
+      .Case("opencl.image2d_depth_t", SPIR::PRIMITIVE_IMAGE_2D_DEPTH_T)
+      .Case("opencl.image2d_array_depth_t",
+            SPIR::PRIMITIVE_IMAGE_2D_ARRAY_DEPTH_T)
+      .Case("opencl.imagecube_t", SPIR::PRIMITIVE_IMAGE_CUBE_T)
+      .Case("opencl.imagecube_array_t", SPIR::PRIMITIVE_IMAGE_CUBE_ARRAY_T)
+      .Case("opencl.imagecube_depth_t", SPIR::PRIMITIVE_IMAGE_CUBE_DEPTH_T)
+      .Case("opencl.imagecube_array_depth_t",
+            SPIR::PRIMITIVE_IMAGE_CUBE_ARRAY_DEPTH_T)
+	  // <-- for libfloor Vulkan/OpenCL
       .Case("opencl.event_t", SPIR::PRIMITIVE_EVENT_T)
       .Case("opencl.pipe_ro_t", SPIR::PRIMITIVE_PIPE_RO_T)
       .Case("opencl.pipe_wo_t", SPIR::PRIMITIVE_PIPE_WO_T)
@@ -1300,23 +1329,6 @@ std::string getSPIRVImageSampledTypeName(SPIRVType *Ty) {
   return std::string();
 }
 
-// ToDo: Find a way to represent uint sampled type in LLVM, maybe an
-//      opaque type.
-Type *getLLVMTypeForSPIRVImageSampledTypePostfix(StringRef Postfix,
-                                                 LLVMContext &Ctx) {
-  if (Postfix == kSPIRVImageSampledTypeName::Void)
-    return Type::getVoidTy(Ctx);
-  if (Postfix == kSPIRVImageSampledTypeName::Float)
-    return Type::getFloatTy(Ctx);
-  if (Postfix == kSPIRVImageSampledTypeName::Half)
-    return Type::getHalfTy(Ctx);
-  if (Postfix == kSPIRVImageSampledTypeName::Int ||
-      Postfix == kSPIRVImageSampledTypeName::UInt)
-    return Type::getInt32Ty(Ctx);
-  llvm_unreachable("Invalid sampled type postfix");
-  return nullptr;
-}
-
 std::string getImageBaseTypeName(StringRef Name) {
 
   SmallVector<StringRef, 4> SubStrs;
@@ -1399,8 +1411,13 @@ void eraseIfNoUse(Value *V) {
 
 bool eraseUselessFunctions(Module *M) {
   bool Changed = false;
-  for (auto I = M->begin(), E = M->end(); I != E;)
-    Changed |= eraseIfNoUse(&(*I++));
+  for (auto I = M->begin(), E = M->end(); I != E;) {
+    // iterator will be invalidated if the function is erased
+    // -> need to increment before calling eraseIfNoUse
+    Function *func_ptr = &*I;
+    ++I;
+    Changed |= eraseIfNoUse(func_ptr);
+  }
   return Changed;
 }
 
@@ -1969,6 +1986,40 @@ bool postProcessBuiltinsWithArrayArguments(Module *M, bool IsCpp) {
   return true;
 }
 
+/// Translates GLSL image type names to SPIR-V.
+Type *getSPIRVImageTypeFromGLSL(Module *M, Type *ImageTy,
+                                const char *sample_type, const bool is_storage,
+                                const spv::ImageFormat format) {
+  assert(isOCLImageType(ImageTy) && "invalid image type");
+  auto Name = ImageTy->getPointerElementType()->getStructName();
+  assert(Name.startswith(kSPR2TypeName::ImagePrefix) && "invalid image type");
+
+  std::string BaseTy;
+  std::string Postfixes;
+  raw_string_ostream OS(Postfixes);
+  OS << kSPIRVTypeName::PostfixDelim;
+
+  SmallVector<StringRef, 4> SubStrs;
+  const char Delims[] = {kSPR2TypeName::Delimiter, 0};
+  Name.split(SubStrs, Delims);
+  std::string ImageTyName = SubStrs[1].str();
+  if (hasAccessQualifiedName(Name))
+    ImageTyName.erase(ImageTyName.size() - 5, 3);
+  auto Desc = map<SPIRVTypeImageDescriptor>(ImageTyName);
+  Desc.Sampled = (is_storage ? 2 : 1);
+  Desc.Format = format;
+  LLVM_DEBUG(dbgs() << "[trans image type] " << SubStrs[1] << " => "
+               << "(" << (unsigned)Desc.Dim << ", " << Desc.Depth << ", "
+               << Desc.Arrayed << ", " << Desc.MS << ", " << Desc.Sampled
+               << ", " << Desc.Format << ")\n");
+
+  BaseTy = kSPIRVTypeName::Image;
+  OS << getSPIRVImageTypePostfixes(sample_type, Desc, spv::AccessQualifierNone);
+  auto spirv_type_name = getSPIRVTypeName(BaseTy, OS.str());
+
+  return getOrCreateOpaquePtrType(M, spirv_type_name);
+}
+
 } // namespace SPIRV
 
 namespace {
@@ -2119,6 +2170,31 @@ private:
   OCLExtOpKind ExtOpId;
   ArrayRef<Type *> ArgTys;
 };
+class GLSLToSPIRVFriendlyIRMangleInfo : public BuiltinFuncMangleInfo {
+public:
+  GLSLToSPIRVFriendlyIRMangleInfo(GLSLExtOpKind ExtOpId_,
+                                  ArrayRef<Type *> ArgTys, Type *RetTy)
+      : ExtOpId(ExtOpId_), ArgTys(ArgTys) {
+
+    std::string Postfix = "";
+    if (needRetTypePostfix())
+      Postfix = kSPIRVPostfix::Divider + getPostfixForReturnType(RetTy, true);
+
+    UnmangledName = getSPIRVExtFuncName(SPIRVEIS_GLSL, ExtOpId, Postfix);
+  }
+
+  bool needRetTypePostfix() {
+    return false;
+  }
+
+  void init(StringRef) override {
+    // nop
+  }
+
+private:
+  GLSLExtOpKind ExtOpId;
+  ArrayRef<Type *> ArgTys;
+};
 } // namespace
 
 namespace SPIRV {
@@ -2126,6 +2202,13 @@ std::string getSPIRVFriendlyIRFunctionName(OCLExtOpKind ExtOpId,
                                            ArrayRef<Type *> ArgTys,
                                            Type *RetTy) {
   OpenCLStdToSPIRVFriendlyIRMangleInfo MangleInfo(ExtOpId, ArgTys, RetTy);
+  return mangleBuiltin(MangleInfo.getUnmangledName(), ArgTys, &MangleInfo);
+}
+
+std::string getSPIRVFriendlyIRFunctionName(GLSLExtOpKind ExtOpId,
+                                           ArrayRef<Type *> ArgTys,
+                                           Type *RetTy) {
+  GLSLToSPIRVFriendlyIRMangleInfo MangleInfo(ExtOpId, ArgTys, RetTy);
   return mangleBuiltin(MangleInfo.getUnmangledName(), ArgTys, &MangleInfo);
 }
 

@@ -42,6 +42,7 @@
 
 #include "OpenCL.std.h"
 #include "SPIRV.debug.h"
+#include "GLSL.std.450.h"
 #include "SPIRVEnum.h"
 #include "SPIRVUtil.h"
 
@@ -258,6 +259,92 @@ template <> inline void SPIRVMap<SPIRVDebugExtOpKind, std::string>::init() {
   add(SPIRVDebug::Operation, "DebugOperation");
 }
 SPIRV_DEF_NAMEMAP(SPIRVDebugExtOpKind, SPIRVDebugExtOpMap)
+
+typedef GLSLLIB::GLSLstd450 GLSLExtOpKind;
+template <> inline void SPIRVMap<GLSLExtOpKind, std::string>::init() {
+  add(GLSLLIB::Acos, "acos");
+  add(GLSLLIB::Acosh, "acosh");
+  add(GLSLLIB::Asin, "asin");
+  add(GLSLLIB::Asinh, "asinh");
+  add(GLSLLIB::Atan, "atan");
+  add(GLSLLIB::Atan2, "atan2");
+  add(GLSLLIB::Atanh, "atanh");
+  add(GLSLLIB::Ceil, "ceil");
+  add(GLSLLIB::Cos, "cos");
+  add(GLSLLIB::Cosh, "cosh");
+  add(GLSLLIB::Cross, "cross");
+  add(GLSLLIB::Degrees, "degrees");
+  add(GLSLLIB::Determinant, "determinant");
+  add(GLSLLIB::Distance, "distance");
+  add(GLSLLIB::Exp, "exp");
+  add(GLSLLIB::Exp2, "exp2");
+  add(GLSLLIB::FAbs, "fabs");
+  add(GLSLLIB::FaceForward, "face_forward");
+  add(GLSLLIB::FClamp, "fclamp");
+  add(GLSLLIB::FindILsb, "find_ilsb");
+  add(GLSLLIB::FindSMsb, "find_smsb");
+  add(GLSLLIB::FindUMsb, "find_umsb");
+  add(GLSLLIB::Floor, "floor");
+  add(GLSLLIB::Fma, "fma");
+  add(GLSLLIB::FMax, "fmax");
+  add(GLSLLIB::FMin, "fmin");
+  add(GLSLLIB::FMix, "fmix");
+  add(GLSLLIB::Fract, "fract");
+  add(GLSLLIB::Frexp, "frexp");
+  add(GLSLLIB::FrexpStruct, "frexp_struct");
+  add(GLSLLIB::FSign, "fsign");
+  add(GLSLLIB::IMix, "imix");
+  add(GLSLLIB::InterpolateAtCentroid, "interpolate_at_centroid");
+  add(GLSLLIB::InterpolateAtOffset, "interpolate_at_offset");
+  add(GLSLLIB::InterpolateAtSample, "interpolate_at_sample");
+  add(GLSLLIB::InverseSqrt, "rsqrt");
+  add(GLSLLIB::Ldexp, "ldexp");
+  add(GLSLLIB::Length, "length");
+  add(GLSLLIB::Log, "log");
+  add(GLSLLIB::Log2, "log2");
+  add(GLSLLIB::MatrixInverse, "matrix_inverse");
+  add(GLSLLIB::Modf, "modf");
+  add(GLSLLIB::ModfStruct, "modf_struct");
+  add(GLSLLIB::NClamp, "nclamp");
+  add(GLSLLIB::NMax, "nmax");
+  add(GLSLLIB::NMin, "nmin");
+  add(GLSLLIB::Normalize, "normalize");
+  add(GLSLLIB::PackDouble2x32, "pack_double_2x32");
+  add(GLSLLIB::PackHalf2x16, "pack_half_2x16");
+  add(GLSLLIB::PackSnorm2x16, "pack_snorm_2x16");
+  add(GLSLLIB::PackSnorm4x8, "pack_snorm4x8");
+  add(GLSLLIB::PackUnorm2x16, "pack_unorm_2x16");
+  add(GLSLLIB::PackUnorm4x8, "pack_unorm_4x8");
+  add(GLSLLIB::Pow, "pow");
+  add(GLSLLIB::Radians, "radians");
+  add(GLSLLIB::Reflect, "reflect");
+  add(GLSLLIB::Refract, "refract");
+  add(GLSLLIB::Round, "round");
+  add(GLSLLIB::RoundEven, "round_even");
+  add(GLSLLIB::SAbs, "s_abs");
+  add(GLSLLIB::SClamp, "s_clamp");
+  add(GLSLLIB::Sin, "sin");
+  add(GLSLLIB::Sinh, "sinh");
+  add(GLSLLIB::SMax, "s_max");
+  add(GLSLLIB::SMin, "s_min");
+  add(GLSLLIB::SmoothStep, "smoothstep");
+  add(GLSLLIB::Sqrt, "sqrt");
+  add(GLSLLIB::SSign, "s_sign");
+  add(GLSLLIB::Step, "step");
+  add(GLSLLIB::Tan, "tan");
+  add(GLSLLIB::Tanh, "tanh");
+  add(GLSLLIB::Trunc, "trunc");
+  add(GLSLLIB::UClamp, "u_clamp");
+  add(GLSLLIB::UMax, "u_max");
+  add(GLSLLIB::UMin, "u_min");
+  add(GLSLLIB::UnpackDouble2x32, "unpack_double_2x32");
+  add(GLSLLIB::UnpackHalf2x16, "unpack_half_2x16");
+  add(GLSLLIB::UnpackSnorm2x16, "unpack_snorm_2x16");
+  add(GLSLLIB::UnpackSnorm4x8, "unpack_snorm_4x8");
+  add(GLSLLIB::UnpackUnorm2x16, "unpack_unorm_2x16");
+  add(GLSLLIB::UnpackUnorm4x8, "unpack_unorm_4x8");
+}
+SPIRV_DEF_NAMEMAP(GLSLExtOpKind, GLSLExtOpMap)
 
 } // namespace SPIRV
 

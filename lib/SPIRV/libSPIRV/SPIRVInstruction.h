@@ -154,6 +154,20 @@ public:
     return hasDecorate(DecorationSaturatedConversion) ||
            OpCode == OpSatConvertSToU || OpCode == OpSatConvertUToS;
   }
+  bool isTerminationInstruction() const {
+    switch (OpCode) {
+      case OpBranch:
+      case OpBranchConditional:
+      case OpSwitch:
+      case OpReturn:
+      case OpReturnValue:
+      case OpKill:
+      case OpUnreachable:
+        return true;
+      default: break;
+    }
+    return false;
+  }
 
   SPIRVBasicBlock *getBasicBlock() const { return BB; }
 
@@ -294,8 +308,11 @@ public:
   /// Get operand as value.
   /// If the operand is a literal, return it as a uint32 constant.
   SPIRVValue *getOpValue(int I) {
-    return isOperandLiteral(I) ? Module->getLiteralAsConstant(Ops[I])
-                               : getValue(Ops[I]);
+    return isOperandLiteral(I)
+               ? Module->getLiteralAsConstant(
+                     Ops[I], Module->getSourceLanguage(nullptr) ==
+                                 spv::SourceLanguageGLSL)
+               : getValue(Ops[I]);
   }
 
   std::vector<SPIRVValue *> getOperands() override {
@@ -707,6 +724,7 @@ protected:
 
 typedef SPIRVInstNoOperand<OpReturn> SPIRVReturn;
 typedef SPIRVInstNoOperand<OpUnreachable> SPIRVUnreachable;
+typedef SPIRVInstNoOperand<OpKill> SPIRVKill;
 
 class SPIRVReturnValue : public SPIRVInstruction {
 public:
@@ -970,6 +988,22 @@ _SPIRV_OP(LessOrGreater)
 _SPIRV_OP(Ordered)
 _SPIRV_OP(Unordered)
 #undef _SPIRV_OP
+
+class SPIRVUndefValueInternal : public SPIRVInstruction {
+public:
+  static const Op OC = internal::OpUndefValueInternal;
+  static const SPIRVWord FixedWordCount = 3;
+
+  SPIRVUndefValueInternal(SPIRVType *TheType, SPIRVId TheId, SPIRVBasicBlock *BB)
+      : SPIRVInstruction(3, OC, TheType, TheId, BB) {
+    validate();
+    assert(BB && "Invalid BB");
+  }
+  // Incomplete constructor
+	SPIRVUndefValueInternal() { validate(); }
+
+  _SPIRV_DEF_ENCDEC2(Type, Id)
+};
 
 class SPIRVSelectBase : public SPIRVInstTemplateBase {
 public:
@@ -1560,6 +1594,38 @@ _SPIRV_OP(BitCount)
 _SPIRV_OP_INTERNAL(ArithmeticFenceINTEL)
 #undef _SPIRV_OP_INTERNAL
 
+template <Op OC_> class SPIRVDerivativeInst : public SPIRVInstruction {
+public:
+  const static Op OC = OC_;
+  // Complete constructor
+  SPIRVDerivativeInst(SPIRVId TheId, SPIRVValue *PVal, SPIRVBasicBlock *TheBB)
+      : SPIRVInstruction(4, OC, PVal->getType(), TheId, TheBB),
+        PId(PVal->getId()) {
+    validate();
+    assert(TheBB && "Invalid BB");
+  }
+  // Incomplete constructor
+  SPIRVDerivativeInst() : SPIRVInstruction(OC), PId(SPIRVID_INVALID) {}
+
+  _SPIRV_DEF_ENCDEC3(Type, Id, PId)
+
+protected:
+  void validate() const override { SPIRVInstruction::validate(); }
+  SPIRVId PId;
+};
+
+#define _SPIRV_OP(x) typedef SPIRVDerivativeInst<Op##x> SPIRV##x;
+_SPIRV_OP(DPdx)
+_SPIRV_OP(DPdy)
+_SPIRV_OP(Fwidth)
+_SPIRV_OP(DPdxFine)
+_SPIRV_OP(DPdyFine)
+_SPIRV_OP(FwidthFine)
+_SPIRV_OP(DPdxCoarse)
+_SPIRV_OP(DPdyCoarse)
+_SPIRV_OP(FwidthCoarse)
+#undef _SPIRV_OP
+
 class SPIRVAccessChainBase : public SPIRVInstTemplateBase {
 public:
   SPIRVValue *getBase() { return this->getValue(this->Ops[0]); }
@@ -1761,7 +1827,7 @@ public:
     assert(Module && "Invalid module");
     ExtSetKind = Module->getBuiltinSet(ExtSetId);
     assert((ExtSetKind == SPIRVEIS_OpenCL || ExtSetKind == SPIRVEIS_Debug ||
-            ExtSetKind == SPIRVEIS_OpenCL_DebugInfo_100) &&
+            ExtSetKind == SPIRVEIS_OpenCL_DebugInfo_100 || ExtSetKind == SPIRVEIS_GLSL) &&
            "not supported");
   }
   void encode(spv_ostream &O) const override {
@@ -1773,6 +1839,9 @@ public:
     case SPIRVEIS_Debug:
     case SPIRVEIS_OpenCL_DebugInfo_100:
       getEncoder(O) << ExtOpDebug;
+      break;
+    case SPIRVEIS_GLSL:
+      getEncoder(O) << ExtOpGLSL;
       break;
     default:
       assert(0 && "not supported");
@@ -1791,6 +1860,9 @@ public:
     case SPIRVEIS_OpenCL_DebugInfo_100:
       getDecoder(I) >> ExtOpDebug;
       break;
+    case SPIRVEIS_GLSL:
+      getDecoder(I) >> ExtOpGLSL;
+      break;
     default:
       assert(0 && "not supported");
       getDecoder(I) >> ExtOp;
@@ -1802,27 +1874,35 @@ public:
     validateBuiltin(ExtSetId, ExtOp);
   }
   bool isOperandLiteral(unsigned Index) const override {
-    assert(ExtSetKind == SPIRVEIS_OpenCL &&
+    assert((ExtSetKind == SPIRVEIS_OpenCL || ExtSetKind == SPIRVEIS_GLSL) &&
            "Unsupported extended instruction set");
-    auto EOC = static_cast<OCLExtOpKind>(ExtOp);
-    switch (EOC) {
-    default:
-      return false;
-    case OpenCLLIB::Vloadn:
-    case OpenCLLIB::Vload_halfn:
-    case OpenCLLIB::Vloada_halfn:
-      return Index == 2;
-    case OpenCLLIB::Vstore_half_r:
-    case OpenCLLIB::Vstore_halfn_r:
-    case OpenCLLIB::Vstorea_halfn_r:
-      return Index == 3;
+    if (ExtSetKind == SPIRVEIS_OpenCL) {
+      auto EOC = static_cast<OCLExtOpKind>(ExtOp);
+      switch (EOC) {
+      default:
+        return false;
+      case OpenCLLIB::Vloadn:
+      case OpenCLLIB::Vload_halfn:
+      case OpenCLLIB::Vloada_halfn:
+        return Index == 2;
+      case OpenCLLIB::Vstore_half_r:
+      case OpenCLLIB::Vstore_halfn_r:
+      case OpenCLLIB::Vstorea_halfn_r:
+        return Index == 3;
+      }
+    } else {
+      auto EGLSL = static_cast<GLSLExtOpKind>(ExtOp);
+      switch (EGLSL) { // TODO: necessary?
+      default:
+        return false;
+      }
     }
   }
   std::vector<SPIRVValue *> getArgValues() {
     std::vector<SPIRVValue *> VArgs;
     for (size_t I = 0; I < Args.size(); ++I) {
       if (isOperandLiteral(I))
-        VArgs.push_back(Module->getLiteralAsConstant(Args[I]));
+        VArgs.push_back(Module->getLiteralAsConstant(Args[I], false));
       else
         VArgs.push_back(getValue(Args[I]));
     }
@@ -1843,6 +1923,7 @@ protected:
     SPIRVWord ExtOp;
     OCLExtOpKind ExtOpOCL;
     SPIRVDebugExtOpKind ExtOpDebug;
+    GLSLExtOpKind ExtOpGLSL;
   };
 };
 
@@ -1875,6 +1956,7 @@ protected:
   _SPIRV_DEF_ENCDEC3(Type, Id, Constituents)
   void validate() const override {
     SPIRVInstruction::validate();
+#if 0 // this doesn't work when no entry for "getId()/Id" exists yet
     switch (getValueType(this->getId())->getOpCode()) {
     case OpTypeVector:
       assert(getConstituents().size() > 1 &&
@@ -1886,6 +1968,10 @@ protected:
     default:
       assert(false && "Invalid type");
     }
+#else // -> use type directly instead
+    assert(Type->isTypeArray() || Type->isTypeStruct() || Type->isTypeVector());
+    assert(!Type->isTypeVector() || (Type->isTypeVector() && getConstituents().size() > 1));
+#endif
   }
   std::vector<SPIRVId> Constituents;
 };
@@ -2008,10 +2094,12 @@ protected:
   }
 
   void validate() const override {
+#if 0 // OpCopyMemory doesn't have an ID!
     assert((getValueType(Id) == getValueType(Source)) && "Inconsistent type");
     assert(getValueType(Id)->isTypePointer() && "Invalid type");
     assert(!(getValueType(Id)->getPointerElementType()->isTypeVoid()) &&
            "Invalid type");
+#endif
     SPIRVInstruction::validate();
   }
 
@@ -2637,8 +2725,27 @@ public:
     // Besides, OpAtomicCompareExchangeWeak, OpAtomicFlagTestAndSet and
     // OpAtomicFlagClear instructions require the "kernel" capability. But this
     // capability should be added by setting the OpenCL memory model.
-    if (hasType() && getType()->isTypeInt(64))
-      return {CapabilityInt64Atomics};
+    if (hasType()) {
+      if (getType()->isTypeInt(64)) {
+        return {CapabilityInt64Atomics};
+      } else if (OpCode == spv::OpAtomicFAddEXT) {
+        if (getType()->isTypeFloat(32)) {
+          return {CapabilityAtomicFloat32AddEXT};
+        } else if (getType()->isTypeFloat(64)) {
+          return {CapabilityAtomicFloat64AddEXT};
+        }
+      }
+    }
+    return {};
+  }
+
+  llvm::Optional<ExtensionID> getRequiredExtension() const override {
+    if (auto parent_ext = SPIRVInstTemplateBase::getRequiredExtension(); parent_ext.hasValue()) {
+      return parent_ext.getValue();
+    }
+    if (hasType() && (getType()->isTypeFloat(32) || getType()->isTypeFloat(64))) {
+      return ExtensionID::SPV_EXT_shader_atomic_float_add;
+    }
     return {};
   }
 
@@ -2731,9 +2838,32 @@ _SPIRV_OP(AtomicFMaxEXT, AtomicFMinMaxEXTBase, true, 7)
 #undef _SPIRV_OP
 
 class SPIRVImageInstBase : public SPIRVInstTemplateBase {
+protected:
+  // kernel and shader image caps differ, so this needs to be handled externally
+  static SPIRVCapVec image_caps;
+
 public:
-  SPIRVCapVec getRequiredCapability() const override {
-    return getVec(CapabilityImageBasic);
+  SPIRVCapVec getRequiredCapability() const override { return image_caps; }
+  static void addCap(const Capability cap) {
+    image_caps.emplace_back(cap);
+    std::sort(image_caps.begin(), image_caps.end());
+    image_caps.erase(std::unique(image_caps.begin(), image_caps.end()),
+                     image_caps.end());
+  }
+};
+
+class SPIRVImageQueryInstBase : public SPIRVInstTemplateBase {
+protected:
+  static SPIRVCapVec image_query_caps;
+
+public:
+  SPIRVCapVec getRequiredCapability() const override { return image_query_caps; }
+  static void addCap(const Capability cap) {
+    image_query_caps.emplace_back(cap);
+    std::sort(image_query_caps.begin(), image_query_caps.end());
+    image_query_caps.erase(
+        std::unique(image_query_caps.begin(), image_query_caps.end()),
+        image_query_caps.end());
   }
 };
 
@@ -2743,8 +2873,17 @@ public:
 _SPIRV_OP(SampledImage, true, 5)
 _SPIRV_OP(ImageSampleImplicitLod, true, 5, true)
 _SPIRV_OP(ImageSampleExplicitLod, true, 7, true, 2)
+_SPIRV_OP(ImageSampleDrefImplicitLod, true, 6, true)
+_SPIRV_OP(ImageSampleDrefExplicitLod, true, 8, true)
+_SPIRV_OP(ImageFetch, true, 5, true)
 _SPIRV_OP(ImageRead, true, 5, true, 2)
 _SPIRV_OP(ImageWrite, false, 4, true, 3)
+#undef _SPIRV_OP
+
+#define _SPIRV_OP(x, ...)                                                      \
+  typedef SPIRVInstTemplate<SPIRVImageQueryInstBase, Op##x, __VA_ARGS__>       \
+      SPIRV##x;
+// ImageQuery instructions
 _SPIRV_OP(ImageQueryFormat, true, 4)
 _SPIRV_OP(ImageQueryOrder, true, 4)
 _SPIRV_OP(ImageQuerySizeLod, true, 5)

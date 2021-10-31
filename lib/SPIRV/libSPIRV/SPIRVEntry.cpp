@@ -193,14 +193,15 @@ void SPIRVEntry::encodeAll(spv_ostream &O) const {
 void SPIRVEntry::encodeChildren(spv_ostream &O) const {}
 
 void SPIRVEntry::encodeWordCountOpCode(spv_ostream &O) const {
+  const Op enc_op = (OpCode == spv::internal::OpUndefValueInternal ? OpUndef : OpCode);
 #ifdef _SPIRV_SUPPORT_TEXT_FMT
   if (SPIRVUseTextFormat) {
-    getEncoder(O) << WordCount << OpCode;
+    getEncoder(O) << WordCount << enc_op;
     return;
   }
 #endif
   assert(WordCount < 65536 && "WordCount must fit into 16-bit value");
-  SPIRVWord WordCountOpCode = (WordCount << WordCountShift) | OpCode;
+  SPIRVWord WordCountOpCode = (WordCount << WordCountShift) | enc_op;
   getEncoder(O) << WordCountOpCode;
 }
 // Read words from SPIRV binary and create members for SPIRVEntry.

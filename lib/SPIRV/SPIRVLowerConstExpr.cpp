@@ -144,7 +144,21 @@ void SPIRVLowerConstExprBase::visit(Module *M) {
         auto *CE = cast<ConstantExpr>(V);
         SPIRVDBG(dbgs() << "[lowerConstantExpressions] " << *CE;)
         auto ReplInst = CE->getAsInstruction();
-        auto InsPoint = II->getParent() == &*FBegin ? II : &FBegin->back();
+        Instruction *InsPoint = nullptr;
+        if (II->getParent() == &*FBegin) {
+          InsPoint = II;
+        } else {
+          InsPoint = &FBegin->back();
+          // ensure that the insertion point does not come before a selection/loop merge in the block
+          if (InsPoint && InsPoint->isTerminator()) {
+            if (auto pre_term_call_instr = dyn_cast_or_null<CallInst>(InsPoint->getPrevNode()); pre_term_call_instr) {
+              const auto& call_func_name = pre_term_call_instr->getCalledFunction()->getName();
+              if (call_func_name == "floor.selection_merge" || call_func_name == "floor.loop_merge") {
+                InsPoint = pre_term_call_instr;
+              }
+            }
+          }
+        }
         ReplInst->insertBefore(InsPoint);
         SPIRVDBG(dbgs() << " -> " << *ReplInst << '\n';)
         std::vector<Instruction *> Users;

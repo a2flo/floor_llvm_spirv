@@ -79,9 +79,15 @@ void verifyRegularizationPass(llvm::Module &, const std::string &);
   }
 
 // Output stream for SPIRV debug information.
+#if 1
+inline spv_ostream &spvdbgs() {
+  return llvm::errs();
+}
+#else
 inline spv_ostream &spvdbgs() {
   return std::cerr;
 }
+#endif
 
 #else
 

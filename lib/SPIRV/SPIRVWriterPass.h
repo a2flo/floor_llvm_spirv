@@ -15,8 +15,9 @@
 #ifndef SPIRV_SPIRVWRITERPASS_H
 #define SPIRV_SPIRVWRITERPASS_H
 
-#include "LLVMSPIRVOpts.h"
+#include "llvm/../../projects/spirv/include/LLVMSPIRVOpts.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/IR/PassManager.h"
 
 namespace llvm {
 class Module;
@@ -26,33 +27,35 @@ class PreservedAnalyses;
 /// \brief Create and return a pass that writes the module to the specified
 /// ostream. Note that this pass is designed for use with the legacy pass
 /// manager.
-ModulePass *createSPIRVWriterPass(std::ostream &Str);
+ModulePass *createSPIRVWriterPass(raw_ostream &Str);
 
 /// \brief Create and return a pass that writes the module to the specified
 /// ostream. Note that this pass is designed for use with the legacy pass
 /// manager.
-ModulePass *createSPIRVWriterPass(std::ostream &Str,
+ModulePass *createSPIRVWriterPass(raw_ostream &Str,
                                   const SPIRV::TranslatorOpts &Opts);
 
 /// \brief Pass for writing a module of IR out to a SPIRV file.
 ///
 /// Note that this is intended for use with the new pass manager. To construct
 /// a pass for the legacy pass manager, use the function above.
-class SPIRVWriterPass {
-  std::ostream &OS;
+class SPIRVWriterPass : public PassInfoMixin<SPIRVWriterPass> {
+  raw_ostream& OS;
   SPIRV::TranslatorOpts Opts;
 
 public:
   /// \brief Construct a SPIRV writer pass around a particular output stream.
-  explicit SPIRVWriterPass(std::ostream &OS) : OS(OS) {
+  explicit SPIRVWriterPass(raw_ostream &OS) : OS(OS) {
+#if 0 // NOPE
     Opts.enableAllExtensions();
+#endif
   }
-  SPIRVWriterPass(std::ostream &OS, const SPIRV::TranslatorOpts &Opts)
+  SPIRVWriterPass(raw_ostream &OS, const SPIRV::TranslatorOpts &Opts)
       : OS(OS), Opts(Opts) {}
 
   /// \brief Run the SPIRV writer pass, and output the module to the selected
   /// output stream.
-  PreservedAnalyses run(Module &M);
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &);
 
   static StringRef name() { return "SPIRVWriterPass"; }
 };
