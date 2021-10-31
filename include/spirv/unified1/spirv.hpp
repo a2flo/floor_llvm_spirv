@@ -92,6 +92,7 @@ enum ExecutionModel {
     ExecutionModelCallableKHR = 5318,
     ExecutionModelCallableNV = 5318,
     ExecutionModelMax = 0x7fffffff,
+    ExecutionModelInvalid = ExecutionModelMax,
 };
 
 enum AddressingModel {
@@ -225,7 +226,7 @@ enum Dim {
     DimRect = 4,
     DimBuffer = 5,
     DimSubpassData = 6,
-    DimMax = 0x7fffffff,
+    DimMax,
 };
 
 enum SamplerAddressingMode {
@@ -286,7 +287,7 @@ enum ImageFormat {
     ImageFormatR8ui = 39,
     ImageFormatR64ui = 40,
     ImageFormatR64i = 41,
-    ImageFormatMax = 0x7fffffff,
+    ImageFormatMax,
 };
 
 enum ImageChannelOrder {
@@ -421,7 +422,8 @@ enum AccessQualifier {
     AccessQualifierReadOnly = 0,
     AccessQualifierWriteOnly = 1,
     AccessQualifierReadWrite = 2,
-    AccessQualifierMax = 0x7fffffff,
+    // used by Vulkan/SPIR-V, which can't have access qualifiers
+    AccessQualifierNone = 0x7fffffff,
 };
 
 enum FunctionParameterAttribute {
