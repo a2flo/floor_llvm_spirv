@@ -183,7 +183,7 @@ public:
 
 private:
   // Common translation options
-  VersionNumber MaxVersion = VersionNumber::MaximumVersion;
+  VersionNumber MaxVersion = VersionNumber::SPIRV_1_0;
   ExtensionsStatusMap ExtStatusMap;
   // SPIRVMemToReg option affects LLVM IR regularization phase
   bool SPIRVMemToReg = false;
