@@ -373,7 +373,6 @@ bool OCLToSPIRVBase::runOCLToSPIRV(Module &Module) {
 
   LLVM_DEBUG(dbgs() << "Enter OCLToSPIRV:\n");
 
-#if 0 // TODO: apply these to latest repo changes
   // language specific handling
   if (SrcLang == spv::SourceLanguageGLSL) {
     // as of now, Vulkan/SPIR-V/GLSL doesn't know constant/UniformConstant
@@ -390,9 +389,6 @@ bool OCLToSPIRVBase::runOCLToSPIRV(Module &Module) {
     // set kernel image caps
     SPIRVImageInstBase::addCap(spv::CapabilityImageBasic);
   }
-
-  transWorkItemBuiltinsToVariables();
-#endif
 
   visit(*M);
 
