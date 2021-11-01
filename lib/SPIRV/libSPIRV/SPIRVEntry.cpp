@@ -255,6 +255,30 @@ void SPIRVEntry::validateBuiltin(SPIRVWord TheSet, SPIRVWord Index) const {
 
 void SPIRVEntry::addDecorate(SPIRVDecorate *Dec) {
   auto Kind = Dec->getDecorateKind();
+
+  // ensure added decorates are unique
+  if (!Decorates.empty() && Dec->getOpCode() == OpDecorate) {
+    auto kind_range = Decorates.equal_range(Kind);
+    if (kind_range.first != Decorates.end()) {
+      for (auto kind_iter = kind_range.first; kind_iter != kind_range.second; ++kind_iter) {
+        if (kind_iter->second->getTargetId() == Dec->getTargetId() &&
+          kind_iter->second->getOpCode() == OpDecorate &&
+          kind_iter->second->getLiteralCount() == Dec->getLiteralCount()) {
+          bool equal_lits = true;
+          for (uint32_t lit_idx = 0, lit_count = kind_iter->second->getLiteralCount(); lit_idx < lit_count; ++lit_idx) {
+            if (kind_iter->second->getLiteral(lit_idx) != Dec->getLiteral(lit_idx)) {
+              equal_lits = false;
+              break;
+            }
+          }
+          if (equal_lits) {
+            return;
+          }
+        }
+      }
+    }
+  }
+
   Decorates.insert(std::make_pair(Kind, Dec));
   Module->addDecorate(Dec);
   if (Kind == spv::DecorationLinkageAttributes) {
