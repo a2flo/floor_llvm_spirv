@@ -6136,6 +6136,22 @@ LLVMToSPIRVBase::transVulkanImageFunction(CallInst *CI, SPIRVBasicBlock *BB,
     auto lod_type = (vulkan_sampling::LOD_TYPE)lod_type_arg->getZExtValue();
     assert(lod_type <= vulkan_sampling::LOD_TYPE::__MAX_LOD_TYPE &&
            "invalid lod type");
+
+    const bool is_fragment_shader = (CI->getParent()->getParent()->getCallingConv() == CallingConv::FLOOR_FRAGMENT);
+    if (!is_fragment_shader && (lod_type == vulkan_sampling::LOD_TYPE::IMPLICIT_LOD ||
+                                lod_type == vulkan_sampling::LOD_TYPE::IMPLICIT_LOD_WITH_BIAS)) {
+      // implicit LOD is only allowed in fragment shaders -> fix it
+      auto explicit_lod_arg = ConstantInt::get(IntegerType::get(M->getContext(), 32), 0);
+      if (lod_type == vulkan_sampling::LOD_TYPE::IMPLICIT_LOD_WITH_BIAS) {
+        // replace bias arg with dummy 0
+        args[arg_idx] = explicit_lod_arg;
+      } else {
+        // insert dummy 0
+        args.insert(args.begin() + arg_idx, explicit_lod_arg);
+      }
+      lod_type = vulkan_sampling::LOD_TYPE::EXPLICIT_LOD;
+    }
+
     switch (lod_type) {
     case vulkan_sampling::LOD_TYPE::NO_LOD:
       read_opcode = spv::OpImageFetch;
@@ -6196,9 +6212,9 @@ LLVMToSPIRVBase::transVulkanImageFunction(CallInst *CI, SPIRVBasicBlock *BB,
       assert((read_opcode == spv::OpImageSampleImplicitLod ||
               read_opcode == spv::OpImageSampleExplicitLod) &&
              "invalid read opcode");
-      read_opcode =
-          (spv::OpImageSampleImplicitLod ? spv::OpImageSampleDrefImplicitLod
-                                         : spv::OpImageSampleDrefExplicitLod);
+      read_opcode = (read_opcode == spv::OpImageSampleImplicitLod ?
+                     spv::OpImageSampleDrefImplicitLod :
+                     spv::OpImageSampleDrefExplicitLod);
       read_operands.emplace_back(transValue(compare_arg, BB)->getId());
     }
 
