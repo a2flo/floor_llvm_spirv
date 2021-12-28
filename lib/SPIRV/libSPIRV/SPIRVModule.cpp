@@ -320,7 +320,7 @@ public:
                                           SPIRVBasicBlock *, bool) override;
   SPIRVInstruction *addAccessChainInst(SPIRVType *, SPIRVValue *,
                                        std::vector<SPIRVValue *>,
-                                       SPIRVBasicBlock *, bool) override;
+                                       SPIRVBasicBlock *, bool, bool) override;
   SPIRVInstruction *addAsyncGroupCopy(SPIRVValue *Scope, SPIRVValue *Dest,
                                       SPIRVValue *Src, SPIRVValue *NumElems,
                                       SPIRVValue *Stride, SPIRVValue *Event,
@@ -1778,7 +1778,8 @@ SPIRVModuleImpl::addPtrAccessChainInst(SPIRVType *Type, SPIRVValue *Base,
 SPIRVInstruction *
 SPIRVModuleImpl::addAccessChainInst(SPIRVType *Type, SPIRVValue *Base,
                                     std::vector<SPIRVValue *> Indices,
-                                    SPIRVBasicBlock *BB, bool IsInBounds) {
+                                    SPIRVBasicBlock *BB, bool IsInBounds,
+                                    bool erase_first_index_if_static_array) {
   // check if this is a run-time array access (SSBO)
   bool is_rtarr_access = false;
   if (Base->getType()->isTypePointer() &&
@@ -1796,8 +1797,10 @@ SPIRVModuleImpl::addAccessChainInst(SPIRVType *Type, SPIRVValue *Base,
         begin(Indices),
         addIntegerConstant((SPIRVTypeInt *)Indices[0]->getType(), 0));
   } else if (Indices.size() > 1) {
-    // if it's not a run-time array access, remove the first (0) index
-    Indices.erase(Indices.begin());
+    if (erase_first_index_if_static_array) {
+      // if it's not a run-time array access, remove the first (0) index
+      Indices.erase(Indices.begin());
+    }
   }
   return addInstruction(
       SPIRVInstTemplateBase::create(

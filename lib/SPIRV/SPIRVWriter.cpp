@@ -3885,10 +3885,12 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
                                              img_type_iter->second);
 
       auto img_array = transValue(CI->getOperand(0), BB);
-      const std::vector<SPIRVValue *> indices{
-          transValue(CI->getOperand(1), BB)};
+      std::vector<SPIRVValue *> indices;
+      for (uint32_t arg_idx = 1; arg_idx < CI->arg_size(); ++arg_idx) {
+        indices.emplace_back(transValue(CI->getArgOperand(arg_idx), BB));
+      }
       auto gep =
-          BM->addAccessChainInst(img_ptr_type, img_array, indices, BB, true);
+          BM->addAccessChainInst(img_ptr_type, img_array, indices, BB, true, false);
       return BM->addLoadInst(gep, {}, BB);
     } else if (MangledName == "floor.loop_merge") {
       auto merge_bb = transValue(CI->getArgOperand(0), nullptr);
@@ -4567,6 +4569,7 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
 
       //
       const auto elem_count = (uint32_t)std::stoull(elem_count_str);
+      uint32_t elem_count_inner_2d = 0;
       llvm::Type *img_type = GV.getType();
       if (is_array) {
         // image array
@@ -4576,7 +4579,17 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
         assert(img_array_type != nullptr && "image type must be an array type");
         assert(img_array_type->getNumElements() == elem_count &&
                "invalid image array element count");
-        img_type = img_array_type->getArrayElementType();
+
+        // writable image arrays may be a 2D array
+        auto img_array_elem_type = img_array_type->getArrayElementType();
+        if (img_array_elem_type->isPointerTy() &&
+            img_array_elem_type->getPointerElementType()->isArrayTy()) {
+          auto inner_img_array_type = dyn_cast<ArrayType>(img_array_elem_type->getPointerElementType());
+          img_type = inner_img_array_type->getArrayElementType();
+          elem_count_inner_2d = inner_img_array_type->getNumElements();
+        } else {
+          img_type = img_array_elem_type;
+        }
       }
       //
       auto SPIRVImageTy = getSPIRVImageTypeFromGLSL(
@@ -4589,8 +4602,11 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
       //
       auto ptr_img_type = transSPIRVImageTy;
       if (is_array) {
-        ptr_img_type = BM->addArrayType(
-            transSPIRVImageTy, BM->getLiteralAsConstant(elem_count, false));
+        if (elem_count_inner_2d == 0) {
+          ptr_img_type = BM->addArrayType(transSPIRVImageTy, BM->getLiteralAsConstant(elem_count, false));
+        } else {
+          ptr_img_type = BM->addArrayType(BM->addArrayType(transSPIRVImageTy, BM->getLiteralAsConstant(elem_count_inner_2d, false)), BM->getLiteralAsConstant(elem_count, false));
+        }
       }
 
       mapped_type =
@@ -5190,11 +5206,22 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
 
           auto img_ptr_type = array_type->getArrayElementType();
           assert(img_ptr_type->isPointerTy() && "expected image pointer type");
-          auto img_type = img_ptr_type->getPointerElementType();
+          auto arr_elem_type = array_type->getArrayElementType();
+          assert(arr_elem_type->isPointerTy() && "expected array element to be a pointer type");
+          auto arr_elem_ptr_type = arr_elem_type->getPointerElementType();
+          llvm::Type* img_type = nullptr;
+          if (arr_elem_ptr_type->isStructTy()) { // 1D
+            img_type = arr_elem_ptr_type;
+          } else if (arr_elem_ptr_type->isArrayTy()) { // 2D
+            auto inner_arr_elem_type = arr_elem_ptr_type->getArrayElementType();
+            assert(inner_arr_elem_type->isPointerTy() && "expected inner array element to be a pointer type");
+            img_type = inner_arr_elem_type->getPointerElementType();
+          } else {
+            assert(false && "unexpected array element type");
+          }
           assert(img_type->isStructTy() && "expected image struct type");
           auto st_img_type = cast<StructType>(img_type);
-          assert(st_img_type->getStructName().startswith("opencl.image") &&
-                 "expected image type");
+          assert(st_img_type->getStructName().startswith("opencl.image") && "expected image type");
 
           // -> image array
           spirv_global_io_type global_type;

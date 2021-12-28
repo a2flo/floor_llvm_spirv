@@ -307,7 +307,8 @@ public:
                                                   SPIRVBasicBlock *, bool) = 0;
   virtual SPIRVInstruction *addAccessChainInst(SPIRVType *, SPIRVValue *,
                                                std::vector<SPIRVValue *>,
-                                               SPIRVBasicBlock *, bool) = 0;
+                                               SPIRVBasicBlock *, bool,
+                                               bool = true) = 0;
   virtual SPIRVInstruction *
   addAsyncGroupCopy(SPIRVValue *Scope, SPIRVValue *Dest, SPIRVValue *Src,
                     SPIRVValue *NumElems, SPIRVValue *Stride, SPIRVValue *Event,
