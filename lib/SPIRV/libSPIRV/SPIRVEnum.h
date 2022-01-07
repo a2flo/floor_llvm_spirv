@@ -455,8 +455,9 @@ template <> inline void SPIRVMap<BuiltIn, SPIRVCapVec>::init() {
   ADD_VEC_INIT(BuiltInCullDistance, {CapabilityCullDistance});
   ADD_VEC_INIT(BuiltInVertexId, {CapabilityShader});
   ADD_VEC_INIT(BuiltInInstanceId, {CapabilityShader});
+  // NOTE: just add on cap, not both
   ADD_VEC_INIT(BuiltInPrimitiveId,
-               {CapabilityGeometry, CapabilityTessellation});
+               {CapabilityGeometry/*, CapabilityTessellation*/});
   ADD_VEC_INIT(BuiltInInvocationId,
                {CapabilityGeometry, CapabilityTessellation});
   ADD_VEC_INIT(BuiltInLayer, {CapabilityGeometry});
@@ -504,6 +505,7 @@ template <> inline void SPIRVMap<BuiltIn, SPIRVCapVec>::init() {
   ADD_VEC_INIT(internal::BuiltInMaxHWThreadIDPerSubDeviceINTEL,
                {internal::CapabilityHWThreadQueryINTEL});
   ADD_VEC_INIT(BuiltInViewIndex, {CapabilityMultiView});
+  ADD_VEC_INIT(BuiltInBaryCoordKHR, {CapabilityFragmentBarycentricKHR});
 }
 
 template <> inline void SPIRVMap<MemorySemanticsMask, SPIRVCapVec>::init() {

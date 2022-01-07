@@ -441,7 +441,7 @@ template <> inline void SPIRVMap<Capability, std::string>::init() {
   add(CapabilityFragmentFullyCoveredEXT, "FragmentFullyCoveredEXT");
   add(CapabilityMeshShadingNV, "MeshShadingNV");
   add(CapabilityImageFootprintNV, "ImageFootprintNV");
-  add(CapabilityFragmentBarycentricNV, "FragmentBarycentricNV");
+  add(CapabilityFragmentBarycentricKHR, "FragmentBarycentricKHR");
   add(CapabilityComputeDerivativeGroupQuadsNV, "ComputeDerivativeGroupQuadsNV");
   add(CapabilityFragmentDensityEXT, "FragmentDensityEXT");
   add(CapabilityShadingRateNV, "ShadingRateNV");

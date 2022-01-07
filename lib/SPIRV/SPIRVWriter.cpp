@@ -4666,6 +4666,9 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
 
   if (global_type.is_builtin) {
     BVar->setBuiltin(builtin);
+    if (builtin == spv::BuiltInBaryCoordKHR) {
+      BM->addExtension(ExtensionID::SPV_NV_fragment_shader_barycentric); // TODO: use KHR extension
+    }
   }
 
   BM->addEntryPointIO(spirv_func->getId(), BVar);
@@ -4923,6 +4926,7 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           {"vertex_index", spv::BuiltInVertexIndex},
           {"instance_index", spv::BuiltInInstanceIndex},
           {"view_index", spv::BuiltInViewIndex},
+          {"barycentric_coord", spv::BuiltInBaryCoordKHR},
       };
       const auto iter = builtin_lut.find(str);
       if (iter == builtin_lut.end()) {
@@ -4952,7 +4956,7 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
                 VULKAN_STAGE::GEOMETRY)},
               //{ spv::BuiltInVertexId, VULKAN_STAGE::NONE },
               //{ spv::BuiltInInstanceId, VULKAN_STAGE::NONE },
-              {spv::BuiltInPrimitiveId, VULKAN_STAGE::GEOMETRY},
+              {spv::BuiltInPrimitiveId, VULKAN_STAGE::GEOMETRY | VULKAN_STAGE::FRAGMENT},
               {spv::BuiltInInvocationId,
                (VULKAN_STAGE::TESSELLATION_CONTROL | VULKAN_STAGE::GEOMETRY)},
               {spv::BuiltInLayer, VULKAN_STAGE::FRAGMENT},
@@ -4997,6 +5001,7 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
                (VULKAN_STAGE::VERTEX | VULKAN_STAGE::TESSELLATION_CONTROL |
                 VULKAN_STAGE::TESSELLATION_EVALUATION | VULKAN_STAGE::GEOMETRY |
                 VULKAN_STAGE::FRAGMENT)},
+              {spv::BuiltInBaryCoordKHR, VULKAN_STAGE::FRAGMENT},
           };
       static const std::unordered_map<spv::BuiltIn, VULKAN_STAGE>
           builtin_validity_output_lut{
