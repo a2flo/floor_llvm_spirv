@@ -455,7 +455,7 @@ template <> inline void SPIRVMap<BuiltIn, SPIRVCapVec>::init() {
   ADD_VEC_INIT(BuiltInCullDistance, {CapabilityCullDistance});
   ADD_VEC_INIT(BuiltInVertexId, {CapabilityShader});
   ADD_VEC_INIT(BuiltInInstanceId, {CapabilityShader});
-  // NOTE: just add on cap, not both
+  // NOTE: just add one cap, not both
   ADD_VEC_INIT(BuiltInPrimitiveId,
                {CapabilityGeometry/*, CapabilityTessellation*/});
   ADD_VEC_INIT(BuiltInInvocationId,
