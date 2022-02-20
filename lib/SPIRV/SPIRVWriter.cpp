@@ -175,7 +175,9 @@ SPIRVValue *LLVMToSPIRVBase::getTranslatedValue(const Value *V) const {
 bool LLVMToSPIRVBase::isEntryPoint(Function *F) {
   if (F->getCallingConv() == CallingConv::FLOOR_KERNEL||
       F->getCallingConv() == CallingConv::FLOOR_VERTEX ||
-      F->getCallingConv() == CallingConv::FLOOR_FRAGMENT)
+      F->getCallingConv() == CallingConv::FLOOR_FRAGMENT ||
+      F->getCallingConv() == CallingConv::FLOOR_TESS_CONTROL ||
+      F->getCallingConv() == CallingConv::FLOOR_TESS_EVAL)
     return true;
   return false;
 }
@@ -191,6 +193,10 @@ spv::ExecutionModel LLVMToSPIRVBase::getEntryPointType(Function *F,
     return spv::ExecutionModel::ExecutionModelVertex;
   case CallingConv::FLOOR_FRAGMENT:
     return spv::ExecutionModel::ExecutionModelFragment;
+  case CallingConv::FLOOR_TESS_CONTROL:
+    return spv::ExecutionModel::ExecutionModelTessellationControl;
+  case CallingConv::FLOOR_TESS_EVAL:
+    return spv::ExecutionModel::ExecutionModelTessellationEvaluation;
   default:
     return spv::ExecutionModel::ExecutionModelInvalid;
   }
@@ -4394,7 +4400,7 @@ static const char *vulkan_stage_to_string(const VULKAN_STAGE &stage) {
   case VULKAN_STAGE::TESSELLATION_CONTROL:
     return "tessellation-control";
   case VULKAN_STAGE::TESSELLATION_EVALUATION:
-    return "tesselation-evaluation";
+    return "tessellation-evaluation";
   case VULKAN_STAGE::GEOMETRY:
     return "geometry";
   case VULKAN_STAGE::FRAGMENT:
@@ -4820,7 +4826,9 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
   if (SrcLang == SourceLanguageGLSL &&
       (F->getCallingConv() == llvm::CallingConv::FLOOR_KERNEL ||
        F->getCallingConv() == llvm::CallingConv::FLOOR_VERTEX ||
-       F->getCallingConv() == llvm::CallingConv::FLOOR_FRAGMENT)) {
+       F->getCallingConv() == llvm::CallingConv::FLOOR_FRAGMENT ||
+       F->getCallingConv() == llvm::CallingConv::FLOOR_TESS_CONTROL ||
+       F->getCallingConv() == llvm::CallingConv::FLOOR_TESS_EVAL)) {
     VULKAN_STAGE stage;
     switch (F->getCallingConv()) {
     case llvm::CallingConv::FLOOR_VERTEX:
@@ -4828,6 +4836,12 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
       break;
     case llvm::CallingConv::FLOOR_FRAGMENT:
       stage = VULKAN_STAGE::FRAGMENT;
+      break;
+    case llvm::CallingConv::FLOOR_TESS_CONTROL:
+      stage = VULKAN_STAGE::TESSELLATION_CONTROL;
+      break;
+    case llvm::CallingConv::FLOOR_TESS_EVAL:
+      stage = VULKAN_STAGE::TESSELLATION_EVALUATION;
       break;
     case llvm::CallingConv::FLOOR_KERNEL:
       stage = VULKAN_STAGE::KERNEL;

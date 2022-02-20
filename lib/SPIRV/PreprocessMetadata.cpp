@@ -171,7 +171,9 @@ void PreprocessMetadataBase::visit(Module *M) {
   for (Function &Func : *M) {
     if (Func.getCallingConv() != CallingConv::FLOOR_KERNEL &&
 		Func.getCallingConv() != CallingConv::FLOOR_VERTEX &&
-		Func.getCallingConv() != CallingConv::FLOOR_FRAGMENT)
+		Func.getCallingConv() != CallingConv::FLOOR_FRAGMENT &&
+		Func.getCallingConv() != CallingConv::FLOOR_TESS_CONTROL &&
+		Func.getCallingConv() != CallingConv::FLOOR_TESS_EVAL)
       continue;
 
     // Specifing execution modes for the Kernel and adding it to the list

@@ -85,8 +85,9 @@ static bool is_used_in_function(const Function *F, const GlobalVariable *GV) {
       return true;
     break;
   case CallingConv::FLOOR_VERTEX:
-    break;
   case CallingConv::FLOOR_FRAGMENT:
+  case CallingConv::FLOOR_TESS_CONTROL:
+  case CallingConv::FLOOR_TESS_EVAL:
     break;
   }
 
@@ -113,7 +114,9 @@ static bool write_container(Module &M, raw_ostream &OS) {
   for (const auto &F : M) {
     if (F.getCallingConv() != CallingConv::FLOOR_KERNEL &&
         F.getCallingConv() != CallingConv::FLOOR_VERTEX &&
-        F.getCallingConv() != CallingConv::FLOOR_FRAGMENT) {
+        F.getCallingConv() != CallingConv::FLOOR_FRAGMENT &&
+        F.getCallingConv() != CallingConv::FLOOR_TESS_CONTROL &&
+        F.getCallingConv() != CallingConv::FLOOR_TESS_EVAL) {
       continue;
     }
     clone_functions.emplace(&F);
@@ -192,6 +195,12 @@ static bool write_container(Module &M, raw_ostream &OS) {
       break;
     case CallingConv::FLOOR_FRAGMENT:
       function_type = 3;
+      break;
+    case CallingConv::FLOOR_TESS_CONTROL:
+      function_type = 4;
+      break;
+    case CallingConv::FLOOR_TESS_EVAL:
+      function_type = 5;
       break;
     default:
       llvm_unreachable("invalid function type");
