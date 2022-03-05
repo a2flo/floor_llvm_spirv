@@ -591,22 +591,25 @@ SPIRVType *LLVMToSPIRVBase::transSPIRVOpaqueType(Type *T) {
     assert(T->getPointerAddressSpace() == SPIRAS_Global);
 
     SPIRVType *SampledT = nullptr;
-    if (Postfixes[1] == kSPIRVImageSampledTypeName::Void) {
+    const auto type_idx = (Postfixes.size() == 8 ? 0u : 1u);
+    if (Postfixes[type_idx] == kSPIRVImageSampledTypeName::Void) {
       SampledT = BM->addVoidType();
-    } else if (Postfixes[1] == kSPIRVImageSampledTypeName::Float) {
+    } else if (Postfixes[type_idx] == kSPIRVImageSampledTypeName::Float) {
       SampledT = BM->addFloatType(32);
-    } else if (Postfixes[1] == kSPIRVImageSampledTypeName::Half) {
+    } else if (Postfixes[type_idx] == kSPIRVImageSampledTypeName::Half) {
       SampledT = BM->addFloatType(16);
-    } else if (Postfixes[1] == kSPIRVImageSampledTypeName::UInt) {
+    } else if (Postfixes[type_idx] == kSPIRVImageSampledTypeName::UInt) {
       SampledT = BM->addIntegerType(32, false);
-    } else if (Postfixes[1] == kSPIRVImageSampledTypeName::Int) {
+    } else if (Postfixes[type_idx] == kSPIRVImageSampledTypeName::Int) {
       SampledT = BM->addIntegerType(32, true);
     } else {
       assert(false && "Invalid sampled type postfix");
     }
       
     SmallVector<int, 7> Ops;
-    for (unsigned I = 2; I < 9; ++I)
+    const auto start_idx = (Postfixes.size() == 8 ? 1u : 2u);
+    const auto end_idx = (Postfixes.size() == 8 ? 8u : 9u);
+    for (unsigned I = start_idx; I < end_idx; ++I)
       Ops.push_back(atoi(Postfixes[I].c_str()));
     SPIRVTypeImageDescriptor Desc(static_cast<SPIRVImageDimKind>(Ops[0]),
                                   Ops[1], Ops[2], Ops[3], Ops[4], Ops[5]);
@@ -6283,6 +6286,8 @@ LLVMToSPIRVBase::transVulkanImageFunction(CallInst *CI, SPIRVBasicBlock *BB,
       scalar_ret_type = BM->addIntegerType(32, true);
     } else if (DemangledName.find("read_imagef") == 0) {
       scalar_ret_type = BM->addFloatType(32);
+    } else if (DemangledName.find("read_imageh") == 0) {
+      scalar_ret_type = BM->addFloatType(16);
     } else {
       assert(false && "invalid image read function");
     }
