@@ -2079,22 +2079,91 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
   if (auto Phi = dyn_cast<PHINode>(V)) {
     // NOTE: LLVM has the tendency to allow duplicate predecessors and PHI incoming blocks
     // -> ensure we only add incoming values for unique predecessors
-    std::vector<SPIRVValue *> IncomingPairs;
-    std::unordered_set<BasicBlock*> unique_bbs;
+    // NOTE: also, we need to ensure all values have the same type, or fail otherwise
 
+    std::unordered_set<BasicBlock *> unique_llvm_bbs;
+    std::vector<std::pair<llvm::Value *, llvm::BasicBlock *>>
+        incoming_llvm_pairs;
     for (size_t I = 0, E = Phi->getNumIncomingValues(); I != E; ++I) {
       auto in_bb = Phi->getIncomingBlock(I);
-      if (unique_bbs.count(in_bb) > 0) {
+      if (unique_llvm_bbs.count(in_bb) > 0) {
         continue;
       }
-      unique_bbs.emplace(in_bb);
-
-      IncomingPairs.push_back(transValue(Phi->getIncomingValue(I), BB, true,
-                                         FuncTransMode::Pointer));
-      IncomingPairs.push_back(transValue(Phi->getIncomingBlock(I), nullptr));
+      unique_llvm_bbs.emplace(in_bb);
+      incoming_llvm_pairs.emplace_back(Phi->getIncomingValue(I),
+                                       Phi->getIncomingBlock(I));
     }
+
+    llvm::Type *common_non_const_type = nullptr;
+    for (const auto &incoming : incoming_llvm_pairs) {
+      if (auto const_val = dyn_cast_or_null<Constant>(incoming.first);
+          const_val) {
+        continue;
+      }
+      if (!common_non_const_type) {
+        common_non_const_type = incoming.first->getType();
+        continue;
+      }
+      if (common_non_const_type != incoming.first->getType()) {
+        BM->getErrorLog().checkError(
+            false, SPIRVErrorCode::SPIRVEC_InvalidInstruction, incoming.first,
+            "PHI type mismatch: all non-const PHI value types must be "
+            "identical");
+        return nullptr;
+      }
+    }
+    if (!common_non_const_type->isIntegerTy()) {
+      // ignore this for all non-integer types
+      // TODO: also int vector types ...
+      common_non_const_type = nullptr;
+    }
+
+    std::vector<SPIRVValue *> IncomingPairs;
+    // add all non-const pairs first, or everything if we have no common
+    // non-const type
+    for (auto &incoming : incoming_llvm_pairs) {
+      if (!common_non_const_type ||
+          dyn_cast_or_null<Constant>(incoming.first) == nullptr) {
+        IncomingPairs.push_back(
+            transValue(incoming.first, BB, true, FuncTransMode::Pointer));
+        IncomingPairs.push_back(transValue(incoming.second, nullptr));
+        continue;
+      }
+    }
+    // handle all constant and make sure they have the same type as the
+    // non-const type
+    if (common_non_const_type) {
+      assert(!IncomingPairs.empty() &&
+             "IncomingPairs should not be empty at this point");
+      const auto &non_const_spirv_type = IncomingPairs[0]->getType();
+      assert(non_const_spirv_type->isTypeInt());
+      const auto non_const_spirv_int_type =
+          (const SPIRVTypeInt *)non_const_spirv_type;
+      for (auto &incoming : incoming_llvm_pairs) {
+        auto const_val = dyn_cast_or_null<Constant>(incoming.first);
+        if (!const_val) {
+          continue;
+        }
+        // constant value type mismatch
+        // -> cast to correct type
+        if (auto const_int = dyn_cast<ConstantInt>(incoming.first); const_int) {
+          auto int_type =
+              BM->addIntegerType(non_const_spirv_int_type->getBitWidth(),
+                                 non_const_spirv_int_type->isSigned());
+          IncomingPairs.push_back(
+              BM->addIntegerConstant(int_type, const_int->getZExtValue()));
+        } else {
+          // fallback
+          IncomingPairs.push_back(
+              transValue(incoming.first, BB, true, FuncTransMode::Pointer));
+        }
+        IncomingPairs.push_back(transValue(incoming.second, nullptr));
+      }
+    }
+
+    assert(!common_non_const_type || (common_non_const_type == Phi->getType()));
     return mapValue(
-        V, BM->addPhiInst(transType(Phi->getType()), IncomingPairs, BB));
+        V, BM->addPhiInst(IncomingPairs[0]->getType(), IncomingPairs, BB));
   }
 
   if (auto Ext = dyn_cast<ExtractValueInst>(V)) {
