@@ -56,6 +56,8 @@
 #include <set>
 #include <vector>
 
+#define DEBUG_TYPE "spirv-reg"
+
 using namespace llvm;
 using namespace SPIRV;
 using namespace OCLUtil;

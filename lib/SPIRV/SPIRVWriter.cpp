@@ -4858,7 +4858,7 @@ static bool is_write_only_arg(Function &F, Argument &arg) {
           // calls are somewhat tricky
           else if (CallInst *CI = dyn_cast<CallInst>(user)) {
             // does read -> bail
-            if (!CI->doesNotReadMemory()) {
+            if (!CI->onlyWritesMemory()) {
               return false;
             }
             // we don't know what the call is doing exactly, but if it does
