@@ -2112,7 +2112,7 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
         return nullptr;
       }
     }
-    if (!common_non_const_type->isIntegerTy()) {
+    if (common_non_const_type && !common_non_const_type->isIntegerTy()) {
       // ignore this for all non-integer types
       // TODO: also int vector types ...
       common_non_const_type = nullptr;
@@ -4815,7 +4815,7 @@ GlobalVariable *LLVMToSPIRVBase::emitShaderGlobal(
   }
 
   auto GV =
-      new GlobalVariable(*M, llvm_type, false, GlobalVariable::InternalLinkage,
+      new GlobalVariable(*M, llvm_type, false, GlobalVariable::ExternalWeakLinkage,
                          nullptr, F.getName().str() + name_type + var_name,
                          nullptr, GlobalValue::NotThreadLocal, address_space);
 
@@ -5580,11 +5580,9 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
     if (added_globals.count(&GV) > 0)
       continue;
 
-    // ignore external globals
-    if (GV.getLinkage() == GlobalValue::ExternalLinkage ||
-        GV.getLinkage() == GlobalValue::AvailableExternallyLinkage ||
-        GV.getLinkage() == GlobalValue::PrivateLinkage ||
-        GV.getLinkage() == GlobalValue::ExternalWeakLinkage)
+    // ignore globals with unknown/unhandled linkage
+    if (GV.getLinkage() == GlobalValue::AvailableExternallyLinkage ||
+        GV.getLinkage() == GlobalValue::PrivateLinkage)
       continue;
 
     const auto gv_as = GV.getType()->getAddressSpace();
@@ -5606,7 +5604,7 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
       // duplicate
       auto dup = new GlobalVariable(
           *M, GV.getType()->getPointerElementType(), GV.isConstant(),
-          GlobalVariable::InternalLinkage,
+          GlobalVariable::ExternalWeakLinkage,
           (GV.hasInitializer() ? GV.getInitializer() : nullptr),
           GV.getName() + "." + F->getName(), nullptr,
           GlobalValue::NotThreadLocal, GV.getType()->getAddressSpace());
