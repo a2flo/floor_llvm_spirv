@@ -324,6 +324,12 @@ public:
   bool isValidIndex(SPIRVWord Index) const { return Index < CompCount; }
   SPIRVCapVec getRequiredCapability() const override {
     SPIRVCapVec V(getComponentType()->getRequiredCapability());
+
+    // nothing to add here for shaders
+    if (Module->getSourceLanguage(nullptr) == SourceLanguageGLSL) {
+      return V;
+    }
+
     // Even though the capability name is "Vector16", it describes
     // usage of 8-component or 16-component vectors.
     if (CompCount == 8 || CompCount == 16)

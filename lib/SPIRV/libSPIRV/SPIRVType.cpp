@@ -243,6 +243,11 @@ bool SPIRVTypeStruct::isPacked() const {
 }
 
 void SPIRVTypeStruct::setPacked(bool Packed) {
+  // don't do this for shaders (note that GLSLPacked is forbidden in Vulkan)
+  if (Module->getSourceLanguage(nullptr) == SourceLanguageGLSL) {
+    return;
+  }
+
   if (Packed)
     addDecorate(new SPIRVDecorate(DecorationCPacked, this));
   else
