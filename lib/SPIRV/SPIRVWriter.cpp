@@ -5551,7 +5551,12 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
       auto gv_wg_size = M->getNamedGlobal(global_name);
 
       // NOTE: 128 is the minimum value that has to be supported for x
-      const uint32_t default_wg_size_vals[3]{128, 1, 1};
+      uint32_t default_wg_size_vals[3]{128, 1, 1};
+      // use user-specified local/work-group size if there is any
+      if (MDNode *WGSize = F->getMetadata(kSPIR2MD::WGSize); WGSize) {
+        decodeMDNode(WGSize, default_wg_size_vals[0], default_wg_size_vals[1],
+                     default_wg_size_vals[2]);
+      }
       auto uint_type = BM->addIntegerType(32, false);
       auto uint3_type = BM->addVectorType(uint_type, 3);
       std::vector<SPIRVValue *> wg_size_vals{
