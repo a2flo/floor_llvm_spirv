@@ -80,7 +80,7 @@ static bool is_used_in_function(const Function *F, const GlobalVariable *GV) {
   // always flag certain builtin constants as used
   switch (F->getCallingConv()) {
   case CallingConv::FLOOR_KERNEL:
-    if (GV->getName().find(".vulkan_constant.workgroup_size") !=
+    if (GV->getName().find(".vulkan_constant.local_size") !=
         StringRef::npos)
       return true;
     break;
@@ -155,7 +155,7 @@ static bool write_container(Module &M, raw_ostream &OS) {
     // TODO: only enable extensions that are generally supported (needs host enablement as well)
     SPIRV::TranslatorOpts::ExtensionsStatusMap exts;
     exts[SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add] = true;
-    exts[SPIRV::ExtensionID::SPV_NV_fragment_shader_barycentric] = true; // TODO: use KHR extension
+    exts[SPIRV::ExtensionID::SPV_KHR_fragment_shader_barycentric] = true;
     //exts[SPIRV::ExtensionID::SPV_KHR_no_integer_wrap_decoration] = true;
     //exts[SPIRV::ExtensionID::SPV_KHR_float_controls] = true;
     SPIRV::TranslatorOpts opts(SPIRV::VersionNumber::MaximumVersion, exts);

@@ -2240,31 +2240,40 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
                                                    BB, GEP->isInBounds()));
     } else {
       // with variable pointers we can now use PtrAccessChain instead of the
-      // simple AccessChain
+      // simple AccessChain (for SSBOs, local memory and physical SSBOs)
       auto gep_type = transType(GEP->getType());
       auto gep_value = transValue(GEP->getPointerOperand(), BB);
       auto gep_value_type = gep_value->getType();
       const auto storage_class = gep_value_type->getPointerStorageClass();
-
-      // must still treat access to SSBO runtime arrays specially by adding two
-      // additional 0 indices
-      if (storage_class == spv::StorageClassStorageBuffer) {
-        auto gep_value_elem_type = gep_value_type->getPointerElementType();
-        if (gep_value_elem_type->isTypeStruct()) {
-          auto gep_struct_type = (SPIRV::SPIRVTypeStruct *)gep_value_elem_type;
-          if (gep_struct_type->getMemberCount() > 0 &&
-              gep_struct_type->getMemberType(0)->isTypeRuntimeArray()) {
-            auto zero_const = transValue(
-                llvm::ConstantInt::get(llvm::Type::getInt32Ty(*Ctx), 0), BB);
-            Indices.insert(Indices.begin(), zero_const);
-            Indices.insert(Indices.begin(), zero_const);
+      if (storage_class == spv::StorageClassWorkgroup ||
+          storage_class == spv::StorageClassPhysicalStorageBuffer ||
+          storage_class == spv::StorageClassStorageBuffer) {
+        // must still treat access to SSBO runtime arrays specially by adding
+        // two additional 0 indices
+        if (storage_class == spv::StorageClassStorageBuffer) {
+          auto gep_value_elem_type = gep_value_type->getPointerElementType();
+          if (gep_value_elem_type->isTypeStruct()) {
+            auto gep_struct_type =
+                (SPIRV::SPIRVTypeStruct *)gep_value_elem_type;
+            if (gep_struct_type->getMemberCount() > 0 &&
+                gep_struct_type->getMemberType(0)->isTypeRuntimeArray()) {
+              auto zero_const = transValue(
+                  llvm::ConstantInt::get(llvm::Type::getInt32Ty(*Ctx), 0), BB);
+              Indices.insert(Indices.begin(), zero_const);
+              Indices.insert(Indices.begin(), zero_const);
+            }
           }
         }
+        return mapValue(
+            V, BM->addPtrAccessChainInst(gep_type, gep_value, Indices, BB,
+                                         false /* never emit inbounds */));
+      } else {
+        // for all other storage classes: fall back to (Inbounds)AccessChain
+        return mapValue(
+            V, BM->addAccessChainInst(transType(GEP->getType()),
+                                      transValue(GEP->getPointerOperand(), BB),
+                                      Indices, BB, GEP->isInBounds()));
       }
-
-      return mapValue(
-          V, BM->addPtrAccessChainInst(gep_type, gep_value, Indices, BB,
-                                       false /* never emit inbounds */));
     }
   }
 
@@ -4565,7 +4574,7 @@ void LLVMToSPIRVBase::decorateComposite(llvm::Type *llvm_type,
 }
 
 SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
-    SPIRVFunction *spirv_func, const GlobalVariable &GV,
+    const Function &F, SPIRVFunction *spirv_func, const GlobalVariable &GV,
     const std::string &var_name, uint32_t address_space,
     const spirv_global_io_type global_type, const std::string &md_info,
     spv::BuiltIn builtin) {
@@ -4773,9 +4782,7 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
   if (global_type.is_builtin) {
     BVar->setBuiltin(builtin);
     if (builtin == spv::BuiltInBaryCoordKHR) {
-      BM->addExtension(
-          ExtensionID::SPV_NV_fragment_shader_barycentric); // TODO: use KHR
-                                                            // extension
+      BM->addExtension(ExtensionID::SPV_KHR_fragment_shader_barycentric);
     }
   }
 
@@ -4813,8 +4820,12 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
 
   // automatically add the "flat" decoration on types that need it
   // NOTE: vulkan requires that this is only set on input variables
+  // NOTE: for fragment shaders, also do this for builtin input
   if (storage_class == spv::StorageClassInput && !global_type.is_fbo_color &&
-      !global_type.is_fbo_depth && !global_type.is_builtin) {
+      !global_type.is_fbo_depth &&
+      (!global_type.is_builtin ||
+       (global_type.is_builtin &&
+        F.getCallingConv() == llvm::CallingConv::FLOOR_FRAGMENT))) {
     // I/O should always be a pointer type
     if (GV.getType()->isPointerTy()) {
       auto elem_type = GV.getType()->getPointerElementType();
@@ -4850,8 +4861,9 @@ GlobalVariable *LLVMToSPIRVBase::emitShaderGlobal(
       GlobalValue::NotThreadLocal, address_space);
 
   // also add the SPIR-V global
-  auto spirv_var = emitShaderSPIRVGlobal(
-      spirv_func, *GV, var_name, address_space, global_type, md_info, builtin);
+  auto spirv_var =
+      emitShaderSPIRVGlobal(F, spirv_func, *GV, var_name, address_space,
+                            global_type, md_info, builtin);
   if (created_spirv_var != nullptr) {
     *created_spirv_var = spirv_var;
   }
@@ -5478,7 +5490,7 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
             spirv_global_io_type global_type;
             global_type.is_write_only = true;
             global_type.is_fbo_color = true;
-            emitShaderSPIRVGlobal(BF, GV, output_name.str(), SPIRAS_Output,
+            emitShaderSPIRVGlobal(*F, BF, GV, output_name.str(), SPIRAS_Output,
                                   global_type, md_info);
           }
           // -> fbo depth
@@ -5488,7 +5500,7 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
             global_type.is_write_only = true;
             global_type.is_fbo_depth = true;
             global_type.is_builtin = true;
-            emitShaderSPIRVGlobal(BF, GV, output_name.str(), SPIRAS_Output,
+            emitShaderSPIRVGlobal(*F, BF, GV, output_name.str(), SPIRAS_Output,
                                   global_type, md_info, spv::BuiltInFragDepth);
             // since we explicitly write depth, flag the function as
             // "DepthReplacing"
@@ -5508,8 +5520,9 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
               spirv_global_io_type global_type;
               global_type.is_builtin = true;
               global_type.is_write_only = true;
-              emitShaderSPIRVGlobal(BF, GV, output_name.str(), SPIRAS_Output,
-                                    global_type, md_info, builtin.first);
+              emitShaderSPIRVGlobal(*F, BF, GV, output_name.str(),
+                                    SPIRAS_Output, global_type, md_info,
+                                    builtin.first);
             } else {
               // TODO: should catch this earlier
               errs() << "output builtin \"" << md_info
@@ -5528,7 +5541,7 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           global_type.is_write_only = true;
           global_type.set_location = true;
           global_type.location = output_location++;
-          emitShaderSPIRVGlobal(BF, GV, output_name.str(), SPIRAS_Output,
+          emitShaderSPIRVGlobal(*F, BF, GV, output_name.str(), SPIRAS_Output,
                                 global_type, md_info);
         }
         ++output_arg_idx;
@@ -5547,7 +5560,7 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
 
     // set compute shader constant work-group size
     if (F->getCallingConv() == llvm::CallingConv::FLOOR_KERNEL) {
-      const auto global_name = func_name + ".vulkan_constant.workgroup_size";
+      const auto global_name = func_name + ".vulkan_constant.local_size";
       auto gv_wg_size = M->getNamedGlobal(global_name);
 
       // NOTE: 128 is the minimum value that has to be supported for x
@@ -5565,11 +5578,10 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           BM->addSpecIntegerConstant(uint_type, default_wg_size_vals[2]),
       };
       auto wg_size = BM->addSpecCompositeConstant(uint3_type, wg_size_vals);
-      wg_size->addDecorate(spv::DecorationBuiltIn, spv::BuiltInWorkgroupSize);
       BM->setName(wg_size, global_name);
-      BF->addExecutionMode(new SPIRVExecutionMode(
-          BF, spv::ExecutionModeLocalSize, default_wg_size_vals[0],
-          default_wg_size_vals[1], default_wg_size_vals[2]));
+      BF->addExecutionMode(new SPIRVExecutionModeId(
+          BF, spv::ExecutionModeLocalSizeId, wg_size_vals[0]->getId(),
+          wg_size_vals[1]->getId(), wg_size_vals[2]->getId()));
 
       // set work-group size (x, y, z) spec ids to 1, 2 and 3
       // NOTE: we're starting this at 1 instead of 0, b/c of nvidia driver bugs
@@ -5742,8 +5754,8 @@ bool LLVMToSPIRVBase::transVulkanVersion() {
   switch (version_major) {
   case 1:
     switch (version_minor) {
-    case 2:
-      BM->setSPIRVVersion(static_cast<uint32_t>(VersionNumber::SPIRV_1_5));
+    case 3:
+      BM->setSPIRVVersion(static_cast<uint32_t>(VersionNumber::SPIRV_1_6));
       break;
     default:
       return false;

@@ -611,6 +611,24 @@ void SPIRVExecutionMode::decode(std::istream &I) {
   getOrCreateTarget()->addExecutionMode(Module->add(this));
 }
 
+void SPIRVExecutionModeId::encode(spv_ostream &O) const {
+  getEncoder(O) << Target << ExecMode << Ids;
+}
+
+void SPIRVExecutionModeId::decode(std::istream &I) {
+  getDecoder(I) >> Target >> ExecMode;
+  switch (static_cast<uint32_t>(ExecMode)) {
+  case ExecutionModeLocalSizeId:
+  case ExecutionModeLocalSizeHintId:
+    Ids.resize(3);
+    break;
+  default:
+    break;
+  }
+  getDecoder(I) >> Ids;
+  getOrCreateTarget()->addExecutionMode(Module->add(this));
+}
+
 SPIRVForward *SPIRVAnnotationGeneric::getOrCreateTarget() const {
   SPIRVEntry *Entry = nullptr;
   bool Found = Module->exist(Target, &Entry);

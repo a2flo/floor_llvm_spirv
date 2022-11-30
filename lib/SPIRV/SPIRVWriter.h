@@ -254,7 +254,7 @@ private:
       spv::BuiltIn builtin = spv::BuiltIn::BuiltInPosition);
 
   SPIRVVariable *
-  emitShaderSPIRVGlobal(SPIRVFunction *spirv_func, const GlobalVariable &GV,
+  emitShaderSPIRVGlobal(const Function &F, SPIRVFunction *spirv_func, const GlobalVariable &GV,
                         const std::string &var_name, uint32_t address_space,
                         const spirv_global_io_type global_type,
                         const std::string &md_info,

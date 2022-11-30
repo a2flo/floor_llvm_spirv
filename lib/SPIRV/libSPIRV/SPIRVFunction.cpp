@@ -87,6 +87,8 @@ void SPIRVFunction::encodeChildren(spv_ostream &O) const {
 void SPIRVFunction::encodeExecutionModes(spv_ostream &O) const {
   for (auto &I : ExecModes)
     O << *I.second;
+  for (auto &I : ExecModeIds)
+    O << *I.second;
 }
 
 void SPIRVFunction::decode(std::istream &I) {

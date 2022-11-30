@@ -691,12 +691,42 @@ protected:
   std::vector<SPIRVWord> WordLiterals;
 };
 
+class SPIRVExecutionModeId : public SPIRVAnnotation<OpExecutionModeId> {
+public:
+  // Complete constructor for LocalSizeId, LocalSizeHintId
+  SPIRVExecutionModeId(SPIRVEntry *TheTarget, SPIRVExecutionModeKind TheExecMode,
+                       SPIRVId X, SPIRVId Y, SPIRVId Z)
+      : SPIRVAnnotation(TheTarget, 6), ExecMode(TheExecMode) {
+    Ids.push_back(X);
+    Ids.push_back(Y);
+    Ids.push_back(Z);
+    updateModuleVersion();
+  }
+  // Incomplete constructor
+  SPIRVExecutionModeId() : ExecMode(ExecutionModeInvocations) {}
+  SPIRVExecutionModeKind getExecutionMode() const { return ExecMode; }
+  const std::vector<SPIRVId> &getIds() const { return Ids; }
+  SPIRVCapVec getRequiredCapability() const override {
+    return getCapability(ExecMode);
+  }
+
+protected:
+  _SPIRV_DCL_ENCDEC
+  SPIRVExecutionModeKind ExecMode;
+  std::vector<SPIRVId> Ids;
+};
+
 class SPIRVComponentExecutionModes {
   typedef std::multimap<SPIRVExecutionModeKind, SPIRVExecutionMode *>
       SPIRVExecutionModeMap;
   typedef std::pair<SPIRVExecutionModeMap::const_iterator,
                     SPIRVExecutionModeMap::const_iterator>
       SPIRVExecutionModeRange;
+  typedef std::multimap<SPIRVExecutionModeKind, SPIRVExecutionModeId *>
+      SPIRVExecutionModeIdMap;
+  typedef std::pair<SPIRVExecutionModeIdMap::const_iterator,
+                    SPIRVExecutionModeIdMap::const_iterator>
+      SPIRVExecutionModeIdRange;
 
 public:
   void addExecutionMode(SPIRVExecutionMode *ExecMode) {
@@ -758,8 +788,24 @@ public:
     return ExecModes.equal_range(EMK);
   }
 
+  void addExecutionMode(SPIRVExecutionModeId *ExecMode) {
+    SPIRVExecutionModeKind EMK = ExecMode->getExecutionMode();
+    ExecModeIds.emplace(EMK, ExecMode);
+  }
+  SPIRVExecutionModeId *getExecutionModeId(SPIRVExecutionModeKind EMK) const {
+    auto Loc = ExecModeIds.find(EMK);
+    if (Loc == ExecModeIds.end())
+      return nullptr;
+    return Loc->second;
+  }
+  SPIRVExecutionModeIdRange
+  getExecutionModeIdRange(SPIRVExecutionModeKind EMK) const {
+    return ExecModeIds.equal_range(EMK);
+  }
+
 protected:
   SPIRVExecutionModeMap ExecModes;
+  SPIRVExecutionModeIdMap ExecModeIds;
 };
 
 class SPIRVExtInstImport : public SPIRVEntry {

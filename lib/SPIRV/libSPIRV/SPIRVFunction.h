@@ -126,6 +126,7 @@ public:
 
   void takeExecutionModes(SPIRVForward *Forward) {
     ExecModes = std::move(Forward->ExecModes);
+    ExecModeIds = std::move(Forward->ExecModeIds);
   }
 
   // Assume BB contains valid Id.
