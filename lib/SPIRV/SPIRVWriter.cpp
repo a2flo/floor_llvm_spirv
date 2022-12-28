@@ -4264,19 +4264,45 @@ void LLVMToSPIRVBase::transGlobalIOPipeStorage(GlobalVariable *V, MDNode *IO) {
 bool LLVMToSPIRVBase::transGlobalVariables() {
   // add global fixed/immutable samplers array that is always present
   if (SrcLang == spv::SourceLanguageGLSL) {
-    auto samplers_type = BM->addPointerType(
-        spv::StorageClassUniformConstant,
-        BM->addArrayType(BM->addSamplerType(),
-                         BM->getLiteralAsConstant(32, false)));
-    immutable_samplers = static_cast<SPIRVVariable *>(
-        BM->addVariable(samplers_type, true, spv::internal::LinkageTypeInternal,
-                        nullptr, "vulkan.immutable_samplers",
-                        spv::StorageClassUniformConstant, nullptr));
-    BM->setName(immutable_samplers, "vulkan.immutable_samplers");
-    immutable_samplers->addDecorate(
-        new SPIRVDecorate(DecorationDescriptorSet, immutable_samplers, 0));
-    immutable_samplers->addDecorate(
-        new SPIRVDecorate(DecorationBinding, immutable_samplers, 0));
+    static constexpr const uint32_t fixed_sampler_count{32u};
+    if (bool has_vulkan_descriptor_buffer =
+            M->getNamedMetadata("floor.vulkan_descriptor_buffer");
+        has_vulkan_descriptor_buffer) {
+      // -> for descriptor buffer use
+      auto sampler_type = BM->addPointerType(spv::StorageClassUniformConstant,
+                                             BM->addSamplerType());
+      for (uint32_t i = 0; i < fixed_sampler_count; ++i) {
+        auto var_name = "vulkan.immutable_sampler_" + std::to_string(i);
+        auto immutable_sampler_var =
+            static_cast<SPIRVVariable *>(BM->addVariable(
+                sampler_type, true, spv::internal::LinkageTypeInternal, nullptr,
+                var_name, spv::StorageClassUniformConstant, nullptr));
+        BM->setName(immutable_sampler_var, var_name);
+        immutable_sampler_var->addDecorate(new SPIRVDecorate(
+            DecorationDescriptorSet, immutable_sampler_var, 0));
+        immutable_sampler_var->addDecorate(
+            new SPIRVDecorate(DecorationBinding, immutable_sampler_var, i));
+        immutable_samplers.emplace_back(immutable_sampler_var);
+      }
+    } else {
+      // -> legacy
+      auto samplers_type =
+          BM->addPointerType(spv::StorageClassUniformConstant,
+                             BM->addArrayType(BM->addSamplerType(),
+                                              BM->getLiteralAsConstant(
+                                                  fixed_sampler_count, false)));
+      auto immutable_samplers_var =
+          static_cast<SPIRVVariable *>(BM->addVariable(
+              samplers_type, true, spv::internal::LinkageTypeInternal, nullptr,
+              "vulkan.immutable_samplers", spv::StorageClassUniformConstant,
+              nullptr));
+      BM->setName(immutable_samplers_var, "vulkan.immutable_samplers");
+      immutable_samplers_var->addDecorate(new SPIRVDecorate(
+          DecorationDescriptorSet, immutable_samplers_var, 0));
+      immutable_samplers_var->addDecorate(
+          new SPIRVDecorate(DecorationBinding, immutable_samplers_var, 0));
+      immutable_samplers.emplace_back(immutable_samplers_var);
+    }
   }
 
   for (auto I = M->global_begin(), E = M->global_end(); I != E; ++I) {
@@ -5549,8 +5575,10 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
     }
 
     // add immutable samples to the interface
-    if (immutable_samplers) {
-      BM->addEntryPointIO(BF->getId(), immutable_samplers);
+    if (!immutable_samplers.empty()) {
+      for (auto &var : immutable_samplers) {
+        BM->addEntryPointIO(BF->getId(), var);
+      }
     }
 
     // Create all basic blocks before creating any instruction.
@@ -6274,14 +6302,23 @@ LLVMToSPIRVBase::transVulkanImageFunction(CallInst *CI, SPIRVBasicBlock *BB,
     SPIRVValue *loaded_sampler = nullptr;
     SPIRVValue *img = loaded_img;
     if (!is_fetch) {
-      std::vector<SPIRVValue *> indices{
-          BM->getLiteralAsConstant(sampler_val.value, false)};
+      const bool has_vulkan_descriptor_buffer =
+          (M->getNamedMetadata("floor.vulkan_descriptor_buffer") != nullptr);
+      if (has_vulkan_descriptor_buffer) {
+        // -> for descriptor buffer use
+        loaded_sampler =
+            BM->addLoadInst(immutable_samplers[sampler_val.value], {}, BB);
+      } else {
+        // -> legacy
+        std::vector<SPIRVValue *> indices{
+            BM->getLiteralAsConstant(sampler_val.value, false)};
 
-      auto sampler_ptr = BM->addAccessChainInst(
-          BM->addPointerType(spv::StorageClassUniformConstant,
-                             BM->addSamplerType()),
-          immutable_samplers, indices, BB, true);
-      loaded_sampler = BM->addLoadInst(sampler_ptr, {}, BB);
+        auto sampler_ptr = BM->addAccessChainInst(
+            BM->addPointerType(spv::StorageClassUniformConstant,
+                               BM->addSamplerType()),
+            immutable_samplers[0], indices, BB, true);
+        loaded_sampler = BM->addLoadInst(sampler_ptr, {}, BB);
+      }
 
       // create the sampled image
       std::vector<SPIRVWord> sampled_img_ops{

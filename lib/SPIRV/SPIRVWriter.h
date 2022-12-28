@@ -260,7 +260,7 @@ private:
                         const std::string &md_info,
                         spv::BuiltIn builtin = spv::BuiltIn::BuiltInPosition);
 
-  SPIRVVariable *immutable_samplers{nullptr};
+  std::vector<SPIRVVariable *> immutable_samplers;
   std::pair<SPIRVInstruction *, Op>
   transVulkanImageFunction(CallInst *CI, SPIRVBasicBlock *BB,
                            const std::string &DemangledName);
