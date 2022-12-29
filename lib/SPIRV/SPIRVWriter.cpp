@@ -4654,9 +4654,9 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
           enclosing_type->addDecorate(
               new SPIRVDecorate(DecorationBlock, enclosing_type));
           enclosing_type->addMemberDecorate(0, spv::DecorationOffset, 0);
-          rtarr_type->addDecorate(
-              spv::DecorationArrayStride,
-              M->getDataLayout().getTypeStoreSize(elem_type));
+          auto array_stride = M->getDataLayout().getTypeStoreSize(elem_type);
+          rtarr_type->addDecorate(spv::DecorationArrayStride, array_stride);
+          mapped_type->addDecorate(spv::DecorationArrayStride, array_stride);
         } else {
           // we need to use the storage buffer storage class
           assert(elem_type->isStructTy() && "SSBO must be a struct");
@@ -4665,6 +4665,9 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
           mapped_type = transType(ssbo_ptr_type);
           spirv_elem_type->addDecorate(
               new SPIRVDecorate(DecorationBlock, spirv_elem_type));
+          mapped_type->addDecorate(
+              spv::DecorationArrayStride,
+              M->getDataLayout().getTypeStoreSize(elem_type));
         }
       } else {
         assert(elem_type->isStructTy() && "uniform type must be a struct");
