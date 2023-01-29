@@ -1,7 +1,7 @@
 //===- LLVMToSPIRVTransformations.cpp -------------------------------------===//
 //
 //  Flo's Open libRary (floor)
-//  Copyright (C) 2004 - 2022 Florian Ziesche
+//  Copyright (C) 2004 - 2023 Florian Ziesche
 //
 //  This program is free software; you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
@@ -147,7 +147,7 @@ struct LLVMToSPIRVTransformations
     InsertElementInst *cur_insert = &I;
     for (uint32_t i = 1;; ++i) {
       // abort if the index isn't constant or is not contiguous in 0..#elems-1
-      // NOTE: we do except that LLVM has ordered these
+      // NOTE: we do expect that LLVM has ordered these
       auto idx = dyn_cast<ConstantInt>(cur_insert->getOperand(2));
       if (idx == nullptr || idx->getZExtValue() != (i - 1)) {
         replace = false;

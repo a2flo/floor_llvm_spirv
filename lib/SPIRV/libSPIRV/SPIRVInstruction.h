@@ -953,7 +953,12 @@ protected:
     assert(isCmpOpCode(OpCode) && "Invalid op code for cmp inst");
     assert((ResTy->isTypeBool() || ResTy->isTypeInt()) &&
            "Invalid type for compare instruction");
-    assert(Op1Ty == Op2Ty && "Inconsistent types");
+    // NOTE: the spec *does not* require the types to be equal, just that both
+    // types fulfill the requirements above + have the same bitness,
+    // signedness is not mentioned anywhere
+    //assert(Op1Ty == Op2Ty && "Inconsistent types");
+    assert(Op1Ty->getBitWidth() == Op2Ty->getBitWidth() &&
+           "Inconsistent bit width");
   }
 };
 

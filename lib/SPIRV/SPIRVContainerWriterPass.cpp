@@ -1,7 +1,7 @@
 //===- SPIRVContainerWriterPass.cpp - SPIRV writing pass ------------------===//
 //
 //  Flo's Open libRary (floor)
-//  Copyright (C) 2004 - 2022 Florian Ziesche
+//  Copyright (C) 2004 - 2023 Florian Ziesche
 //
 //  This program is free software; you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
@@ -58,9 +58,8 @@
 //  * compute/kernel: 1
 //  * vertex: 2
 //  * fragment: 3
-//  * geometry: 4
-//  * tessellation control: 5
-//  * tessellation evaluation: 6
+//  * tessellation control: 4
+//  * tessellation evaluation: 5
 //
 //===----------------------------------------------------------------------===//
 

@@ -6,7 +6,7 @@
 // License. See LICENSE.TXT for details.
 //
 // Copyright (c) 2014 Advanced Micro Devices, Inc. All rights reserved.
-// Copyright (c) 2016 - 2021 Florian Ziesche Vulkan/SPIR-V support
+// Copyright (c) 2016 - 2023 Florian Ziesche Vulkan/SPIR-V support
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
 // copy of this software and associated documentation files (the "Software"),
@@ -5241,42 +5241,92 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
     // TODO: proper input/output location handling: 1x - 4x 32-bit values can be
     // packed into a single location, anything larger needs to be distributed
     // over multiple locations
-    uint32_t input_arg_idx = 0, uniform_arg_idx = 0;
+    uint32_t input_arg_idx = 0, uniform_arg_idx = 0, arg_buffer_arg_idx = 0;
     uint32_t input_location = 0;
     uint32_t desc_set = 0;
+    uint32_t arg_buffer_desc_set_offset = 0;
+    uint32_t arg_buffer_desc_set = 0;
     switch (stage) { // put each stage into a different set
     case VULKAN_STAGE::KERNEL:
+      desc_set = 1;
+      arg_buffer_desc_set_offset = 2; // [2, 15]
+      break;
     case VULKAN_STAGE::VERTEX:
       desc_set = 1;
+      arg_buffer_desc_set_offset = 5; // [5, 8]
       break;
     case VULKAN_STAGE::FRAGMENT:
       desc_set = 2;
+      arg_buffer_desc_set_offset = 9; // [9, 12]
       break;
     case VULKAN_STAGE::GEOMETRY:
-      desc_set = 3;
-      break;
     case VULKAN_STAGE::TESSELLATION_CONTROL:
-      desc_set = 4;
+      // will never support geometry shaders + tessellation at the same time
+      desc_set = 3;
+      arg_buffer_desc_set_offset = 13; // [13, 15]
       break;
     case VULKAN_STAGE::TESSELLATION_EVALUATION:
-      desc_set = 5;
+      desc_set = 4;
       break;
     default:
       llvm_unreachable("invalid stage");
     }
+    arg_buffer_desc_set = arg_buffer_desc_set_offset;
     for (Argument &arg : F->args()) {
       llvm::Type *arg_type = arg.getType();
       const auto arg_name = arg.getName();
 
-      const auto md_prefix_split_pos = md_data_input[input_arg_idx].find(':');
-      const std::string md_prefix =
-          (md_prefix_split_pos != std::string::npos
-               ? md_data_input[input_arg_idx].substr(0, md_prefix_split_pos)
-               : "");
-      const std::string md_info =
-          (md_prefix_split_pos != std::string::npos
-               ? md_data_input[input_arg_idx].substr(md_prefix_split_pos + 1)
-               : md_data_input[input_arg_idx]);
+      const auto &arg_md_in = md_data_input[input_arg_idx];
+      const auto md_prefix_split_pos = arg_md_in.find(':');
+      std::string md_prefix = (md_prefix_split_pos != std::string::npos
+                                   ? arg_md_in.substr(0, md_prefix_split_pos)
+                                   : "");
+
+      std::string md_info = (md_prefix_split_pos != std::string::npos
+                                 ? arg_md_in.substr(md_prefix_split_pos + 1)
+                                 : arg_md_in);
+
+      // descriptor set + binding for this arg
+      uint32_t *arg_desc_set = &desc_set;
+      uint32_t *arg_idx = &uniform_arg_idx;
+
+      // argument buffer pre-handling
+      if (md_prefix == "argbuf") {
+        // extract argument buffer index
+        const auto arg_buf_idx_split_pos = md_info.find(':');
+        const auto actual_md_prefix_split_pos =
+            md_info.find(':', arg_buf_idx_split_pos + 1);
+        if (arg_buf_idx_split_pos == std::string::npos ||
+            actual_md_prefix_split_pos == std::string::npos) {
+          errs() << "invalid argument buffer metadata: " << arg_md_in << "\n";
+          errs().flush();
+          assert(false && "invalid argument buffer metadata");
+          return;
+        }
+        const std::string arg_buf_idx_str =
+            md_info.substr(0, arg_buf_idx_split_pos);
+        const auto arg_buf_idx = std::stoull(arg_buf_idx_str);
+
+        // handle argument buffer index
+        assert(arg_buf_idx + arg_buffer_desc_set_offset < 16);
+        const auto this_arg_buffer_desc_set =
+            arg_buf_idx + arg_buffer_desc_set_offset;
+        if (arg_buffer_desc_set != this_arg_buffer_desc_set) {
+          // -> next arg buffer, reset arg index
+          arg_buffer_arg_idx = 0;
+        }
+        arg_buffer_desc_set = this_arg_buffer_desc_set;
+
+        // set argument buffer descriptor set + binding for this arg
+        arg_desc_set = &arg_buffer_desc_set;
+        arg_idx = &arg_buffer_arg_idx;
+
+        // advance in metadata to get the proper/normal metadata prefix and info
+        md_prefix = md_info.substr(arg_buf_idx_split_pos + 1,
+                                   actual_md_prefix_split_pos -
+                                       arg_buf_idx_split_pos - 1);
+        md_info = md_info.substr(actual_md_prefix_split_pos + 1);
+      }
 
       if (arg_type->isPointerTy() &&
           arg_type->getPointerAddressSpace() != SPIRAS_Input) {
@@ -5301,6 +5351,8 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           if (md_prefix == "iub") {
             global_type.is_iub = true;
             storage_class = SPIRAS_Uniform;
+          } else {
+            assert(md_prefix == "ssbo");
           }
           auto GV =
               emitShaderGlobal(*F, BF, arg_name.str(), elem_type, storage_class,
@@ -5411,11 +5463,11 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           llvm_unreachable("unknown parameter address space");
 
         //
+        uniform_var->addDecorate(new SPIRVDecorate(DecorationDescriptorSet,
+                                                   uniform_var, *arg_desc_set));
         uniform_var->addDecorate(
-            new SPIRVDecorate(DecorationDescriptorSet, uniform_var, desc_set));
-        uniform_var->addDecorate(
-            new SPIRVDecorate(DecorationBinding, uniform_var, uniform_arg_idx));
-        ++uniform_arg_idx;
+            new SPIRVDecorate(DecorationBinding, uniform_var, *arg_idx));
+        ++*arg_idx;
       } else {
         if (md_prefix == "builtin") {
           // -> special input variable
@@ -5494,8 +5546,7 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
     const std::string output_var_name_stub = func_name + ".vulkan_output.";
     uint32_t output_arg_idx = 0, output_location = 0;
     for (const auto &GV : M->globals()) {
-      if (GV.hasName() &&
-          GV.getName().find(output_var_name_stub) != std::string::npos) {
+      if (GV.hasName() && GV.getName().find(output_var_name_stub) == 0) {
         auto output_name = GV.getName().split(".vulkan_output.").second;
 
         assert(output_arg_idx < md_data_output.size() &&
