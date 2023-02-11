@@ -3988,6 +3988,23 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
       auto gep = BM->addAccessChainInst(img_ptr_type, img_array, indices, BB,
                                         true, false);
       return BM->addLoadInst(gep, {}, BB);
+    } else if (MangledName.startswith("floor.ssbo_array_gep.")) {
+      auto base = transValue(CI->getOperand(0), BB);
+      std::vector<SPIRVValue *> indices;
+      for (uint32_t arg_idx = 1 /* first index */; arg_idx < CI->arg_size();
+           ++arg_idx) {
+        indices.emplace_back(transValue(CI->getArgOperand(arg_idx), BB));
+      }
+      auto ptr_type = CI->getType();
+      assert(ptr_type->isPointerTy());
+      assert(ptr_type->getPointerAddressSpace() == 0 ||
+             ptr_type->getPointerAddressSpace() == SPIRAS_StorageBuffer);
+      if (ptr_type->getPointerAddressSpace() != SPIRAS_StorageBuffer) {
+        ptr_type = llvm::PointerType::get(ptr_type->getPointerElementType(),
+                                          SPIRAS_StorageBuffer);
+      }
+      return BM->addAccessChainInst(transType(ptr_type), base, indices, BB,
+                                    true, false);
     } else if (MangledName == "floor.loop_merge") {
       auto merge_bb = transValue(CI->getArgOperand(0), nullptr);
       auto continue_bb = transValue(CI->getArgOperand(1), nullptr);
@@ -4273,6 +4290,58 @@ bool LLVMToSPIRVBase::transGlobalVariables() {
                                              BM->addSamplerType());
       for (uint32_t i = 0; i < fixed_sampler_count; ++i) {
         auto var_name = "vulkan.immutable_sampler_" + std::to_string(i);
+#if defined(_DEBUG)
+        using namespace vulkan_sampling;
+        switch (
+            sampler::FILTER_MODE(i & uint32_t(sampler::__FILTER_MODE_MASK))) {
+        case sampler::FILTER_MODE::NEAREST:
+          var_name += "_nearest";
+          break;
+        case sampler::FILTER_MODE::LINEAR:
+          var_name += "_linear";
+          break;
+        }
+        switch (
+            sampler::ADDRESS_MODE(i & uint32_t(sampler::__ADDRESS_MODE_MASK))) {
+        case sampler::ADDRESS_MODE::CLAMP_TO_EDGE:
+          var_name += "_clamp";
+          break;
+        case sampler::ADDRESS_MODE::REPEAT:
+          var_name += "_repeat";
+          break;
+        default:
+          break;
+        }
+        switch (sampler::COMPARE_FUNCTION(
+            i & uint32_t(sampler::__COMPARE_FUNCTION_MASK))) {
+        case sampler::COMPARE_FUNCTION::NEVER:
+          // implicitly handled as no-compare
+          break;
+        case sampler::COMPARE_FUNCTION::LESS:
+          var_name += "_cmp(<)";
+          break;
+        case sampler::COMPARE_FUNCTION::EQUAL:
+          var_name += "_cmp(==)";
+          break;
+        case sampler::COMPARE_FUNCTION::LESS_OR_EQUAL:
+          var_name += "_cmp(<=)";
+          break;
+        case sampler::COMPARE_FUNCTION::GREATER:
+          var_name += "_cmp(>)";
+          break;
+        case sampler::COMPARE_FUNCTION::NOT_EQUAL:
+          var_name += "_cmp(!=)";
+          break;
+        case sampler::COMPARE_FUNCTION::GREATER_OR_EQUAL:
+          var_name += "_cmp(>=)";
+          break;
+        case sampler::COMPARE_FUNCTION::ALWAYS:
+          var_name += "_cmp(a)";
+          break;
+        default:
+          break;
+        }
+#endif
         auto immutable_sampler_var =
             static_cast<SPIRVVariable *>(BM->addVariable(
                 sampler_type, true, spv::internal::LinkageTypeInternal, nullptr,
@@ -4629,7 +4698,53 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
     auto elem_type = GV.getType()->getPointerElementType();
 
     // -> SSBOs or IUBs
-    if (!global_type.is_image) {
+    if (global_type.is_ssbo_array) {
+      // -> fixed size SSBO array
+      assert(elem_type->isArrayTy() && "must be an array");
+      assert(elem_type->getArrayElementType()->isPointerTy() &&
+             "array element type must be a pointer");
+      assert(elem_type->getArrayElementType()->getPointerAddressSpace() == 0 &&
+             "pointer must have no address space");
+
+      // get array length
+      const auto array_pos = md_info.find(':');
+      assert(array_pos != std::string::npos);
+      const auto array_length_str = md_info.substr(0, array_pos);
+      const auto array_length =
+          (uint64_t)strtoull(array_length_str.c_str(), nullptr, 10);
+
+      // create an outer struct containing a runtime array of the wanted SSBO
+      // elem type
+      const auto ssbo_elem_type =
+          elem_type->getArrayElementType()->getPointerElementType();
+      const auto enclosed_type = transType(ssbo_elem_type);
+      const auto enclosed_array_type = BM->addRuntimeArrayType(enclosed_type);
+
+      std::string enclosing_type_name = "";
+      llvm::raw_string_ostream type_stream(enclosing_type_name);
+      ssbo_elem_type->print(type_stream, false, true);
+
+      auto enclosing_st_type =
+          BM->openStructType(1, "enclose." + enclosing_type_name);
+      enclosing_st_type->setMemberType(0, enclosed_array_type);
+      BM->closeStructType(enclosing_st_type, false);
+      auto spirv_ssbo_elem_type = enclosing_st_type;
+
+      auto ssbo_array_type =
+          BM->addArrayType(spirv_ssbo_elem_type,
+                           (SPIRVConstant *)BM->addIntegerConstant(
+                               BM->addIntegerType(64u, true), array_length));
+      mapped_type = BM->addPointerType(storage_class, ssbo_array_type);
+
+      // add required deco
+      enclosing_st_type->addDecorate(
+          new SPIRVDecorate(DecorationBlock, enclosing_st_type));
+      enclosing_st_type->addMemberDecorate(0, spv::DecorationOffset, 0);
+      auto array_stride = M->getDataLayout().getTypeStoreSize(ssbo_elem_type);
+      enclosed_array_type->addDecorate(spv::DecorationArrayStride,
+                                       array_stride);
+      decorateComposite(ssbo_elem_type, enclosed_type);
+    } else if (!global_type.is_image) {
       auto spirv_elem_type = transType(elem_type);
       if (!global_type.is_iub) {
         if (!global_type.is_constant) {
@@ -4660,8 +4775,8 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
         } else {
           // we need to use the storage buffer storage class
           assert(elem_type->isStructTy() && "SSBO must be a struct");
-          auto ssbo_ptr_type = llvm::PointerType::get(
-              GV.getType()->getPointerElementType(), SPIRAS_StorageBuffer);
+          auto ssbo_ptr_type =
+              llvm::PointerType::get(elem_type, SPIRAS_StorageBuffer);
           mapped_type = transType(ssbo_ptr_type);
           spirv_elem_type->addDecorate(
               new SPIRVDecorate(DecorationBlock, spirv_elem_type));
@@ -5372,9 +5487,10 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
                                        &uniform_var);
             arg.replaceAllUsesWith(GV);
           } else {
-            // -> BufferBlock uniform (SSBO)
+            // -> SSBO
             spirv_global_io_type global_type;
             global_type.is_uniform = true;
+            global_type.is_ssbo_array = (md_prefix == "ssbo_array");
             global_type.is_read_only = arg.onlyReadsMemory();
             global_type.is_write_only =
                 (!global_type.is_read_only ? is_write_only_arg(*F, arg)
@@ -5391,6 +5507,13 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
               // simple GEP ptr replacement
               if (GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(user)) {
                 GEP->setOperand(0, GV);
+                continue;
+              } else if (auto ssbo_array_gep = dyn_cast<CallInst>(user);
+                         ssbo_array_gep &&
+                         ssbo_array_gep->getCalledFunction()
+                             ->getName()
+                             .startswith("floor.ssbo_array_gep.")) {
+                ssbo_array_gep->setOperand(0, GV);
                 continue;
               }
               // direct access
@@ -5421,31 +5544,43 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
                    arg_type->getPointerElementType()->isArrayTy()) {
           auto array_type = cast<ArrayType>(arg_type->getPointerElementType());
 
-          auto img_ptr_type = array_type->getArrayElementType();
-          assert(img_ptr_type->isPointerTy() && "expected image pointer type");
-          auto arr_elem_type = array_type->getArrayElementType();
-          assert(arr_elem_type->isPointerTy() &&
+          auto array_elem_type = array_type->getArrayElementType();
+          assert(array_elem_type->isPointerTy() &&
                  "expected array element to be a pointer type");
-          auto arr_elem_ptr_type = arr_elem_type->getPointerElementType();
-          llvm::Type *img_type = nullptr;
-          if (arr_elem_ptr_type->isStructTy()) { // 1D
-            img_type = arr_elem_ptr_type;
-          } else if (arr_elem_ptr_type->isArrayTy()) { // 2D
-            auto inner_arr_elem_type = arr_elem_ptr_type->getArrayElementType();
+          auto array_elem_ptr_type = array_elem_type->getPointerElementType();
+          llvm::Type *image_or_buffer_type = nullptr;
+          bool is_image = false;
+          if (array_elem_ptr_type->isStructTy() &&
+              !array_elem_ptr_type->isSized()) {
+            // -> 1D array of images
+            image_or_buffer_type = array_elem_ptr_type;
+            is_image = true;
+          } else if (array_elem_ptr_type->isArrayTy()) {
+            // -> 2D array of images
+            auto inner_arr_elem_type =
+                array_elem_ptr_type->getArrayElementType();
             assert(inner_arr_elem_type->isPointerTy() &&
                    "expected inner array element to be a pointer type");
-            img_type = inner_arr_elem_type->getPointerElementType();
+            image_or_buffer_type = inner_arr_elem_type->getPointerElementType();
+            is_image = true;
+          } else if (array_elem_type->getPointerAddressSpace() != 0 &&
+                     array_elem_ptr_type->isSized()) {
+            image_or_buffer_type = array_elem_type;
           } else {
             assert(false && "unexpected array element type");
           }
-          assert(img_type->isStructTy() && "expected image struct type");
-          auto st_img_type = cast<StructType>(img_type);
-          assert(st_img_type->getStructName().startswith("opencl.image") &&
-                 "expected image type");
 
-          // -> image array
+          if (is_image) {
+            assert(image_or_buffer_type->isStructTy() &&
+                   "expected image struct type");
+            auto st_img_type = cast<StructType>(image_or_buffer_type);
+            assert(st_img_type->getStructName().startswith("opencl.image") &&
+                   "expected image type");
+          }
+
+          // -> image/buffer array
           spirv_global_io_type global_type;
-          global_type.is_image = true;
+          global_type.is_image = is_image;
           global_type.is_constant = true;
           global_type.is_uniform = true;
           auto GV = emitShaderGlobal(*F, BF, arg_name.str(), array_type,
@@ -5459,8 +5594,9 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
         } else if (arg_type->getPointerAddressSpace() == SPIRAS_Generic) {
           // -> unknown generic
           llvm_unreachable("generic parameters are not supported");
-        } else
+        } else {
           llvm_unreachable("unknown parameter address space");
+        }
 
         //
         uniform_var->addDecorate(new SPIRVDecorate(DecorationDescriptorSet,

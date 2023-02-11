@@ -48,6 +48,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/LibFloor/VulkanUtils.h"
 #include <vector>
 using namespace llvm;
 using namespace SPIRV;
@@ -289,6 +290,10 @@ struct LLVMToSPIRVTransformations
       }
     }
 #endif
+  }
+
+  void visitGetElementPtrInst(GetElementPtrInst &I) {
+    was_modified |= vulkan_utils::simplify_gep_indices(*ctx, I);
   }
 };
 

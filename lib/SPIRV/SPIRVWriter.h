@@ -235,6 +235,7 @@ private:
     bool is_constant{false};
     bool is_uniform{false};
     bool is_iub{false};
+    bool is_ssbo_array{false};
     bool is_input{false};
     bool is_builtin{false};
     bool is_image{false};
