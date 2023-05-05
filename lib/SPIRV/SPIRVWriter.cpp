@@ -598,7 +598,8 @@ SPIRVType *LLVMToSPIRVBase::transSPIRVOpaqueType(Type *T) {
     } else if (Postfixes[type_idx] == kSPIRVImageSampledTypeName::Float) {
       SampledT = BM->addFloatType(32);
     } else if (Postfixes[type_idx] == kSPIRVImageSampledTypeName::Half) {
-      SampledT = BM->addFloatType(16);
+      // float16 is currently not supported by Vulkan
+      SampledT = BM->addFloatType(SrcLang == spv::SourceLanguageGLSL ? 32 : 16);
     } else if (Postfixes[type_idx] == kSPIRVImageSampledTypeName::UInt) {
       SampledT = BM->addIntegerType(32, false);
     } else if (Postfixes[type_idx] == kSPIRVImageSampledTypeName::Int) {
@@ -4936,12 +4937,6 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
   if (global_type.is_uniform && !global_type.is_image) {
     if (global_type.is_read_only || global_type.is_constant) {
       BVar->addDecorate(new SPIRVDecorate(DecorationNonWritable, BVar));
-#if 0 // NOTE: the NVIDIA driver/compiler can't deal with this if we're using a
-      // SSBO -> disable for now
-      if (global_type.is_constant) {
-        BVar->addDecorate(new SPIRVDecorate(DecorationUniform, BVar));
-      }
-#endif
       // IUB is always uniform
       if (global_type.is_constant && global_type.is_iub) {
         BVar->addDecorate(new SPIRVDecorate(DecorationUniform, BVar));
@@ -6632,6 +6627,7 @@ LLVMToSPIRVBase::transVulkanImageFunction(CallInst *CI, SPIRVBasicBlock *BB,
     }
 
     SPIRVType *scalar_ret_type = nullptr;
+    bool use_relaxed_precision = false;
     if (DemangledName.find("read_imageui") == 0) {
       scalar_ret_type = BM->addIntegerType(32, false);
     } else if (DemangledName.find("read_imagei") == 0) {
@@ -6639,7 +6635,10 @@ LLVMToSPIRVBase::transVulkanImageFunction(CallInst *CI, SPIRVBasicBlock *BB,
     } else if (DemangledName.find("read_imagef") == 0) {
       scalar_ret_type = BM->addFloatType(32);
     } else if (DemangledName.find("read_imageh") == 0) {
-      scalar_ret_type = BM->addFloatType(16);
+      // Vulkan can't handle half precision sampling
+      // -> use 32-bit float instead + flag everything as "RelaxedPrecision"
+      scalar_ret_type = BM->addFloatType(32);
+      use_relaxed_precision = true;
     } else {
       assert(false && "invalid image read function");
     }
@@ -6651,6 +6650,11 @@ LLVMToSPIRVBase::transVulkanImageFunction(CallInst *CI, SPIRVBasicBlock *BB,
 
     auto read_sample =
         BM->addInstTemplate(read_opcode, read_operands, BB, ret_type);
+    if (use_relaxed_precision) {
+      // spec says we should decorate both the instruction and the image
+      read_sample->addDecorate(DecorationRelaxedPrecision);
+      img->addDecorate(DecorationRelaxedPrecision);
+    }
     return {read_sample, read_sample->getOpCode()};
   } else if (DemangledName.find("write_image") == 0) {
     std::vector<SPIRVWord> write_operands{loaded_img->getId()};
@@ -6710,6 +6714,16 @@ LLVMToSPIRVBase::transVulkanImageFunction(CallInst *CI, SPIRVBasicBlock *BB,
     }
     auto write_sample =
         BM->addInstTemplate(spv::OpImageWrite, write_operands, BB, nullptr);
+
+    // Vulkan can't handle half precision writing
+    // -> flag everything as "RelaxedPrecision"
+    if (DemangledName.find("write_imageh") != std::string::npos) {
+      // we can only decorate the image here, since there is no return id
+      loaded_img->addDecorate(DecorationRelaxedPrecision);
+      assert(data_arg->getType()->isTypeVectorOrScalarFloat(32) &&
+             "must be 32-bit float");
+    }
+
     return {write_sample, write_sample->getOpCode()};
   } else if (DemangledName.find(kSPIRVName::ImageQuerySize) !=
              std::string::npos) {

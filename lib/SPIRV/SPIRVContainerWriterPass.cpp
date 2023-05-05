@@ -79,8 +79,7 @@ static bool is_used_in_function(const Function *F, const GlobalVariable *GV) {
   // always flag certain builtin constants as used
   switch (F->getCallingConv()) {
   case CallingConv::FLOOR_KERNEL:
-    if (GV->getName().find(".vulkan_constant.local_size") !=
-        StringRef::npos)
+    if (GV->getName().find(".vulkan_constant.local_size") != StringRef::npos)
       return true;
     break;
   case CallingConv::FLOOR_VERTEX:
@@ -143,6 +142,40 @@ static bool write_container(Module &M, raw_ostream &OS) {
       }
       return false;
     });
+
+    // since CloneModule won't actually remove/erase unused globals, we have to
+    // do another pass that actually removes them ...
+    auto cloned_func = cloned_mod->getFunction(func->getName());
+    assert(cloned_func);
+    std::vector<GlobalVariable *> kill_globals;
+    std::vector<Function *> kill_functions;
+    for (GlobalVariable &G : cloned_mod->globals()) {
+      if (G.getLinkage() == GlobalValue::ExternalLinkage ||
+          G.getLinkage() == GlobalValue::AvailableExternallyLinkage ||
+          G.getLinkage() == GlobalValue::PrivateLinkage ||
+          G.getLinkage() == GlobalValue::ExternalWeakLinkage) {
+        if (!is_used_in_function(cloned_func, &G)) {
+          kill_globals.emplace_back(&G);
+        }
+      }
+    }
+    for (Function &F : cloned_mod->functions()) {
+      const auto CC = F.getCallingConv();
+      if (CC == CallingConv::FLOOR_KERNEL || CC == CallingConv::FLOOR_VERTEX ||
+          CC == CallingConv::FLOOR_FRAGMENT ||
+          CC == CallingConv::FLOOR_TESS_CONTROL ||
+          CC == CallingConv::FLOOR_TESS_EVAL) {
+        if (&F != cloned_func) {
+          kill_functions.emplace_back(&F);
+        }
+      }
+    }
+    for (auto &func : kill_functions) {
+      func->removeFromParent();
+    }
+    for (auto &global : kill_globals) {
+      global->removeFromParent();
+    }
 
     // function entry count
     const uint32_t function_entry_count = 1u;

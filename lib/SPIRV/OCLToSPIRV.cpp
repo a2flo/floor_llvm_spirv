@@ -895,46 +895,83 @@ void OCLToSPIRVBase::transAtomicBuiltin(CallInst *CI,
         const size_t ScopeIdx = ArgsCount - 1;
         const size_t OrderIdx = ScopeIdx - NumOrder;
 
-        Args[ScopeIdx] =
-            transOCLMemScopeIntoSPIRVScope(Args[ScopeIdx], OCLMS_device, CI);
+        const auto ptr_addr_space =
+            SPIRSPIRVAddrSpaceMap::map(static_cast<SPIRAddressSpace>(
+                Args[0]->getType()->getPointerAddressSpace()));
+
+        if (SrcLang == spv::SourceLanguageGLSL) {
+          // Vulkan/GLSL mem scope solely depends on the pointer address space
+          // right now
+          spv::Scope scope = spv::ScopeDevice;
+          switch (ptr_addr_space) {
+          case spv::StorageClassUniform:
+          case spv::StorageClassStorageBuffer:
+          case spv::StorageClassPhysicalStorageBuffer:
+          case spv::StorageClassAtomicCounter:
+          case spv::StorageClassImage:
+          case spv::StorageClassCrossWorkgroup:
+            scope = spv::ScopeDevice;
+            break;
+          case spv::StorageClassWorkgroup:
+            // TODO: sub-group
+            scope = spv::ScopeWorkgroup;
+            break;
+          case spv::StorageClassOutput:
+            scope = spv::ScopeInvocation;
+            break;
+          default:
+            break;
+          }
+          Args[ScopeIdx] = addInt32(scope);
+        } else {
+          Args[ScopeIdx] =
+              transOCLMemScopeIntoSPIRVScope(Args[ScopeIdx], OCLMS_device, CI);
+        }
 
         for (size_t I = 0; I < NumOrder; ++I) {
           if (SrcLang == spv::SourceLanguageGLSL) {
-            Args[OrderIdx + I] = mapUInt(M, cast<ConstantInt>(Args[OrderIdx + I]),
-              [&Args, this](unsigned Ord) {
-                // add Vulkan/GLSL specific memory semantics
-                spv::MemorySemanticsMask memsem = spv::MemorySemanticsMaskNone;
-                if (SrcLang == spv::SourceLanguageGLSL) {
-                  switch (
-                      SPIRSPIRVAddrSpaceMap::map(static_cast<SPIRAddressSpace>(
-                          Args[0]->getType()->getPointerAddressSpace()))) {
-                  case spv::StorageClassUniform:
-                    memsem = spv::MemorySemanticsUniformMemoryMask;
-                    break;
-                  // TODO: no sub-group storage class? handled differently?
-                  case spv::StorageClassWorkgroup:
-                    memsem = spv::MemorySemanticsWorkgroupMemoryMask;
-                    break;
-                  case spv::StorageClassStorageBuffer:
-                  case spv::StorageClassCrossWorkgroup:
-                    memsem = spv::MemorySemanticsCrossWorkgroupMemoryMask;
-                    break;
-                  case spv::StorageClassAtomicCounter:
-                    memsem = spv::MemorySemanticsAtomicCounterMemoryMask;
-                    break;
-                  case spv::StorageClassImage:
-                    memsem = spv::MemorySemanticsImageMemoryMask;
-                    break;
-                  default:
-                    break;
+            Args[OrderIdx + I] = mapUInt(
+                M, cast<ConstantInt>(Args[OrderIdx + I]),
+                [&ptr_addr_space, this](unsigned Ord) {
+                  // add Vulkan/GLSL specific memory semantics
+                  spv::MemorySemanticsMask memsem =
+                      spv::MemorySemanticsMaskNone;
+                  if (SrcLang == spv::SourceLanguageGLSL) {
+                    switch (ptr_addr_space) {
+                    case spv::StorageClassUniform:
+                    case spv::StorageClassStorageBuffer:
+                    case spv::StorageClassPhysicalStorageBuffer:
+                      memsem = spv::MemorySemanticsUniformMemoryMask;
+                      break;
+                    // TODO: no sub-group storage class? handled differently?
+                    case spv::StorageClassWorkgroup:
+                      memsem = spv::MemorySemanticsWorkgroupMemoryMask;
+                      break;
+                    case spv::StorageClassCrossWorkgroup:
+                      memsem = spv::MemorySemanticsCrossWorkgroupMemoryMask;
+                      break;
+                    case spv::StorageClassAtomicCounter:
+                      memsem = spv::MemorySemanticsAtomicCounterMemoryMask;
+                      break;
+                    case spv::StorageClassImage:
+                      memsem = spv::MemorySemanticsImageMemoryMask;
+                      break;
+                    case spv::StorageClassOutput:
+                      memsem = spv::MemorySemanticsOutputMemoryMask;
+                      break;
+                    default:
+                      break;
+                    }
+                    // SequentiallyConsistent memory order is not supported
+                    // -> use AcquireRelease
+                    if (Ord == OCLMO_seq_cst) {
+                      Ord = OCLMO_acq_rel;
+                    }
                   }
-                  // SequentiallyConsistent memory order is not supported -> use AcquireRelease
-                  if (Ord == OCLMO_seq_cst) {
-                    Ord = OCLMO_acq_rel;
-                  }
-                }
-                return mapOCLMemSemanticToSPIRV(0, static_cast<OCLMemOrderKind>(Ord)) | memsem;
-              });
+                  return mapOCLMemSemanticToSPIRV(
+                             0, static_cast<OCLMemOrderKind>(Ord)) |
+                         memsem;
+                });
           } else {
             Args[OrderIdx + I] = transOCLMemOrderIntoSPIRVMemorySemantics(
                 Args[OrderIdx + I], OCLMO_seq_cst, CI);

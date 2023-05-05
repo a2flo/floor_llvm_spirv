@@ -97,10 +97,10 @@ public:
   bool isTypeStruct() const;
   bool isTypeVector() const;
   bool isTypeVectorInt() const;
-  bool isTypeVectorFloat() const;
+  bool isTypeVectorFloat(unsigned Bits = 0) const;
   bool isTypeVectorBool() const;
   bool isTypeVectorOrScalarInt() const;
-  bool isTypeVectorOrScalarFloat() const;
+  bool isTypeVectorOrScalarFloat(unsigned Bits = 0) const;
   bool isTypeVectorOrScalarBool() const;
   bool isTypeSubgroupAvcINTEL() const;
   bool isTypeSubgroupAvcMceINTEL() const;

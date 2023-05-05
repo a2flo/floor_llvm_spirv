@@ -213,8 +213,8 @@ bool SPIRVType::isTypeVectorInt() const {
   return isTypeVector() && getVectorComponentType()->isTypeInt();
 }
 
-bool SPIRVType::isTypeVectorFloat() const {
-  return isTypeVector() && getVectorComponentType()->isTypeFloat();
+bool SPIRVType::isTypeVectorFloat(unsigned Bits) const {
+  return isTypeVector() && getVectorComponentType()->isTypeFloat(Bits);
 }
 
 bool SPIRVType::isTypeVectorOrScalarBool() const {
@@ -234,8 +234,8 @@ bool SPIRVType::isTypeVectorOrScalarInt() const {
   return isTypeInt() || isTypeVectorInt();
 }
 
-bool SPIRVType::isTypeVectorOrScalarFloat() const {
-  return isTypeFloat() || isTypeVectorFloat();
+bool SPIRVType::isTypeVectorOrScalarFloat(unsigned Bits) const {
+  return isTypeFloat(Bits) || isTypeVectorFloat(Bits);
 }
 
 bool SPIRVTypeStruct::isPacked() const {
