@@ -555,6 +555,8 @@ public:
 
   SPIRVExtInstSetKind getDebugInfoEIS() const {
     switch (TranslationOpts.getDebugInfoEIS()) {
+    case DebugInfoEIS::SPIRV_Debug_Vulkan:
+      return SPIRVEIS_GLSL;
     case DebugInfoEIS::SPIRV_Debug:
       return SPIRVEIS_Debug;
     case DebugInfoEIS::OpenCL_DebugInfo_100:

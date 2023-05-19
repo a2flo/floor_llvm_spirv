@@ -205,6 +205,8 @@ static cl::opt<SPIRV::DebugInfoEIS> DebugEIS(
     "spirv-debug-info-version", cl::desc("Set SPIR-V debug info version:"),
     cl::init(SPIRV::DebugInfoEIS::OpenCL_DebugInfo_100),
     cl::values(
+        clEnumValN(SPIRV::DebugInfoEIS::SPIRV_Debug_Vulkan, "vulkan",
+                   "Emit debug info compliant with Vulkan"),
         clEnumValN(SPIRV::DebugInfoEIS::SPIRV_Debug, "legacy",
                    "Emit debug info compliant with the SPIRV.debug extended "
                    "instruction set. This option is used for compatibility "

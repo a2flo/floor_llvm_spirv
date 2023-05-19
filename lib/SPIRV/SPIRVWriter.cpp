@@ -41,6 +41,7 @@
 
 #include "SPIRVWriter.h"
 #include "LLVMToSPIRVDbgTran.h"
+#include "LLVMToSPIRVDbgTranVulkan.h"
 #include "SPIRVAsm.h"
 #include "SPIRVBasicBlock.h"
 #include "SPIRVEntry.h"
@@ -147,7 +148,11 @@ static void translateSEVDecoration(Attribute Sev, SPIRVValue *Val) {
 
 LLVMToSPIRVBase::LLVMToSPIRVBase(SPIRVModule *SMod)
     : M(nullptr), Ctx(nullptr), BM(SMod), SrcLang(0), SrcLangVer(0) {
-  DbgTran = std::make_unique<LLVMToSPIRVDbgTran>(nullptr, SMod, this);
+  if (SMod->getDebugInfoEIS() == SPIRVEIS_GLSL) {
+    DbgTran = std::make_unique<LLVMToSPIRVDbgTranVulkan>(nullptr, SMod, this);
+  } else {
+    DbgTran = std::make_unique<LLVMToSPIRVDbgTran>(nullptr, SMod, this);
+  }
 }
 
 LLVMToSPIRVBase::~LLVMToSPIRVBase() {
@@ -2555,6 +2560,9 @@ bool LLVMToSPIRVBase::transBuiltinSet() {
       return false;
   }
   if (SPIRVMDWalker(*M).getNamedMD("llvm.dbg.cu")) {
+    if (BM->getDebugInfoEIS() == SPIRVEIS_GLSL) {
+      return true;
+    }
     if (!BM->importBuiltinSet(
             SPIRVBuiltinSetNameMap::map(BM->getDebugInfoEIS()), &EISId))
       return false;

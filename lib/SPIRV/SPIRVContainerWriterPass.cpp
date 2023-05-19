@@ -191,6 +191,8 @@ static bool write_container(Module &M, raw_ostream &OS) {
     //exts[SPIRV::ExtensionID::SPV_KHR_no_integer_wrap_decoration] = true;
     //exts[SPIRV::ExtensionID::SPV_KHR_float_controls] = true;
     SPIRV::TranslatorOpts opts(SPIRV::VersionNumber::MaximumVersion, exts);
+    // use the "legacy" debug format that is actually supported by Vulkan/SPIR-V
+    opts.setDebugInfoEIS(SPIRV::DebugInfoEIS::SPIRV_Debug_Vulkan);
     const auto module_success = writeSpirv(cloned_mod.get(), opts, spirv_stream, err);
     auto module_size = uint32_t(spirv_stream.tell() - cur_pos);
     if (module_size % 4 != 0) {

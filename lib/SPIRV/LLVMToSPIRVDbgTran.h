@@ -56,8 +56,9 @@ public:
                      LLVMToSPIRVBase *Writer = nullptr)
       : BM(TBM), M(TM), SPIRVWriter(Writer), VoidT(nullptr),
         DebugInfoNone(nullptr) {}
-  void transDebugMetadata();
-  void setModule(Module *Mod) { M = Mod; }
+  virtual ~LLVMToSPIRVDbgTran() = default;
+  virtual void transDebugMetadata();
+  virtual void setModule(Module *Mod) { M = Mod; }
 
   // Mixing translation of regular instructions and debug info creates a mess.
   // To avoid it we translate debug info intrinsics in two steps:
@@ -66,24 +67,26 @@ public:
   //   but with dummy operands. Doing so we a) map llvm value to spirv value,
   //   b) get a place for SPIRV debug info intrinsic in SPIRV basic block.
   //   We also remember all debug intrinsics.
-  SPIRVValue *createDebugDeclarePlaceholder(const DbgVariableIntrinsic *DbgDecl,
-                                            SPIRVBasicBlock *BB);
-  SPIRVValue *createDebugValuePlaceholder(const DbgVariableIntrinsic *DbgValue,
-                                          SPIRVBasicBlock *BB);
+  virtual SPIRVValue *
+  createDebugDeclarePlaceholder(const DbgVariableIntrinsic *DbgDecl,
+                                SPIRVBasicBlock *BB);
+  virtual SPIRVValue *
+  createDebugValuePlaceholder(const DbgVariableIntrinsic *DbgValue,
+                              SPIRVBasicBlock *BB);
 
-private:
+protected:
   // 2. After translation of all regular instructions we deal with debug info.
   //   We iterate over debug intrinsics stored on the first step, get its mapped
   //   SPIRV instruction and tweak the operands.
-  void finalizeDebugDeclare(const DbgVariableIntrinsic *DbgDecl);
-  void finalizeDebugValue(const DbgVariableIntrinsic *DbgValue);
+  virtual void finalizeDebugDeclare(const DbgVariableIntrinsic *DbgDecl);
+  virtual void finalizeDebugValue(const DbgVariableIntrinsic *DbgValue);
 
   // Emit DebugScope and OpLine instructions
-  void transLocationInfo();
+  virtual void transLocationInfo();
 
   // Dispatcher
-  SPIRVEntry *transDbgEntry(const MDNode *DIEntry);
-  SPIRVEntry *transDbgEntryImpl(const MDNode *MDN);
+  virtual SPIRVEntry *transDbgEntry(const MDNode *DIEntry);
+  virtual SPIRVEntry *transDbgEntryImpl(const MDNode *MDN);
 
   // Helper methods
   SPIRVType *getVoidTy();
@@ -95,56 +98,58 @@ private:
   SPIRVId getDebugInfoNoneId();
 
   // Compilation unit
-  SPIRVEntry *transDbgCompilationUnit(const DICompileUnit *CU);
+  virtual SPIRVEntry *transDbgCompilationUnit(const DICompileUnit *CU);
 
   /// The following methods (till the end of the file) implement translation
   /// of debug instrtuctions described in the spec.
 
   // Types
-  SPIRVEntry *transDbgBaseType(const DIBasicType *BT);
-  SPIRVEntry *transDbgPointerType(const DIDerivedType *PT);
-  SPIRVEntry *transDbgQualifiedType(const DIDerivedType *QT);
-  SPIRVEntry *transDbgArrayType(const DICompositeType *AT);
-  SPIRVEntry *transDbgTypeDef(const DIDerivedType *D);
-  SPIRVEntry *transDbgSubroutineType(const DISubroutineType *FT);
-  SPIRVEntry *transDbgEnumType(const DICompositeType *ET);
-  SPIRVEntry *transDbgCompositeType(const DICompositeType *CT);
-  SPIRVEntry *transDbgMemberType(const DIDerivedType *MT);
-  SPIRVEntry *transDbgInheritance(const DIDerivedType *DT);
-  SPIRVEntry *transDbgPtrToMember(const DIDerivedType *DT);
+  virtual SPIRVEntry *transDbgBaseType(const DIBasicType *BT);
+  virtual SPIRVEntry *transDbgPointerType(const DIDerivedType *PT);
+  virtual SPIRVEntry *transDbgQualifiedType(const DIDerivedType *QT);
+  virtual SPIRVEntry *transDbgArrayType(const DICompositeType *AT);
+  virtual SPIRVEntry *transDbgTypeDef(const DIDerivedType *D);
+  virtual SPIRVEntry *transDbgSubroutineType(const DISubroutineType *FT);
+  virtual SPIRVEntry *transDbgEnumType(const DICompositeType *ET);
+  virtual SPIRVEntry *transDbgCompositeType(const DICompositeType *CT);
+  virtual SPIRVEntry *transDbgMemberType(const DIDerivedType *MT);
+  virtual SPIRVEntry *transDbgInheritance(const DIDerivedType *DT);
+  virtual SPIRVEntry *transDbgPtrToMember(const DIDerivedType *DT);
 
   // Templates
-  SPIRVEntry *transDbgTemplateParams(DITemplateParameterArray TPA,
-                                     const SPIRVEntry *Target);
-  SPIRVEntry *transDbgTemplateParameter(const DITemplateParameter *TP);
-  SPIRVEntry *
+  virtual SPIRVEntry *transDbgTemplateParams(DITemplateParameterArray TPA,
+                                             const SPIRVEntry *Target);
+  virtual SPIRVEntry *transDbgTemplateParameter(const DITemplateParameter *TP);
+  virtual SPIRVEntry *
   transDbgTemplateTemplateParameter(const DITemplateValueParameter *TP);
-  SPIRVEntry *transDbgTemplateParameterPack(const DITemplateValueParameter *TP);
+  virtual SPIRVEntry *
+  transDbgTemplateParameterPack(const DITemplateValueParameter *TP);
 
   // Global objects
-  SPIRVEntry *transDbgGlobalVariable(const DIGlobalVariable *GV);
-  SPIRVEntry *transDbgFunction(const DISubprogram *Func);
+  virtual SPIRVEntry *transDbgGlobalVariable(const DIGlobalVariable *GV);
+  virtual SPIRVEntry *transDbgFunction(const DISubprogram *Func);
 
   // Location information
-  SPIRVEntry *transDbgScope(const DIScope *S);
-  SPIRVEntry *transDebugLoc(const DebugLoc &Loc, SPIRVBasicBlock *BB,
-                            SPIRVInstruction *InsertBefore = nullptr);
-  SPIRVEntry *transDbgInlinedAt(const DILocation *D);
+  virtual SPIRVEntry *transDbgScope(const DIScope *S);
+  virtual SPIRVEntry *transDebugLoc(const DebugLoc &Loc, SPIRVBasicBlock *BB,
+                                    SPIRVInstruction *InsertBefore = nullptr);
+  virtual SPIRVEntry *transDbgInlinedAt(const DILocation *D);
 
   template <class T> SPIRVExtInst *getSource(const T *DIEntry);
-  SPIRVEntry *transDbgFileType(const DIFile *F);
+
+  virtual SPIRVEntry *transDbgFileType(const DIFile *F);
 
   // Local Variables
-  SPIRVEntry *transDbgLocalVariable(const DILocalVariable *Var);
+  virtual SPIRVEntry *transDbgLocalVariable(const DILocalVariable *Var);
 
   // DWARF expressions
-  SPIRVEntry *transDbgExpression(const DIExpression *Expr);
+  virtual SPIRVEntry *transDbgExpression(const DIExpression *Expr);
 
   // Imported declarations and modules
-  SPIRVEntry *transDbgImportedEntry(const DIImportedEntity *IE);
+  virtual SPIRVEntry *transDbgImportedEntry(const DIImportedEntity *IE);
 
   // A module in programming language. Example - Fortran module, clang module.
-  SPIRVEntry *transDbgModule(const DIModule *IE);
+  virtual SPIRVEntry *transDbgModule(const DIModule *IE);
 
   SPIRVModule *BM;
   Module *M;
