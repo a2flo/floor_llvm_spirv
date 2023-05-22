@@ -967,6 +967,8 @@ void OCLToSPIRVBase::transAtomicBuiltin(CallInst *CI,
                     if (Ord == OCLMO_seq_cst) {
                       Ord = OCLMO_acq_rel;
                     }
+                    // always mark volatile with Vulkan memory model
+                    memsem = memsem | spv::MemorySemanticsVolatileMask;
                   }
                   return mapOCLMemSemanticToSPIRV(
                              0, static_cast<OCLMemOrderKind>(Ord)) |

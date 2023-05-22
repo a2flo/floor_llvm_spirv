@@ -2548,72 +2548,84 @@ _SPIRV_OP(GroupNonUniformBallotFindLSB, true, 5)
 _SPIRV_OP(GroupNonUniformBallotFindMSB, true, 5)
 #undef _SPIRV_OP
 
-class SPIRVGroupNonUniformArithmeticInst : public SPIRVInstTemplateBase {
+template <Op OC_> class SPIRVGroupNonUniformArithmeticInst : public SPIRVInstruction {
 public:
-  void setOpWords(const std::vector<SPIRVWord> &Ops) override {
-    SPIRVInstTemplateBase::setOpWords(Ops);
-    SPIRVGroupOperationKind GroupOp;
-    if (getSPIRVGroupOperation(GroupOp)) {
-      if (GroupOp == GroupOperationClusteredReduce)
-        Module->addCapability(CapabilityGroupNonUniformClustered);
-      else
-        Module->addCapability(CapabilityGroupNonUniformArithmetic);
-    } else
-      llvm_unreachable(
-          "GroupNonUniformArithmeticInst has no group operation operand!");
+  const static Op OC = OC_;
+  // Complete constructor
+  SPIRVGroupNonUniformArithmeticInst(SPIRVId TheId, SPIRVValue *scope_, spv::GroupOperation group_op_, SPIRVValue *val_, SPIRVBasicBlock *TheBB)
+      : SPIRVInstruction(6, OC, val_->getType(), TheId, TheBB),
+        val(val_->getId()), scope(scope_->getId()), group_op(group_op_) {
+    validate();
+    assert(TheBB && "Invalid BB");
+    if (group_op == GroupOperationClusteredReduce) {
+      Module->addCapability(CapabilityGroupNonUniformClustered);
+    } else {
+      Module->addCapability(CapabilityGroupNonUniformArithmetic);
+    }
   }
+  // Incomplete constructor
+  SPIRVGroupNonUniformArithmeticInst() : SPIRVInstruction(OC), val(SPIRVID_INVALID), scope(SPIRVID_INVALID), group_op(spv::GroupOperationMax) {}
+
+  _SPIRV_DEF_ENCDEC5(Type, Id, scope, group_op, val)
+
+protected:
+  void validate() const override { SPIRVInstruction::validate(); }
+  SPIRVId val;
+  SPIRVId scope;
+  spv::GroupOperation group_op;
 };
 
-#define _SPIRV_OP(x, ...)                                                      \
-  typedef SPIRVInstTemplate<SPIRVGroupNonUniformArithmeticInst, Op##x,         \
-                            __VA_ARGS__>                                       \
-      SPIRV##x;
-_SPIRV_OP(GroupNonUniformIAdd, true, 6, true, 1)
-_SPIRV_OP(GroupNonUniformFAdd, true, 6, true, 1)
-_SPIRV_OP(GroupNonUniformIMul, true, 6, true, 1)
-_SPIRV_OP(GroupNonUniformFMul, true, 6, true, 1)
-_SPIRV_OP(GroupNonUniformSMin, true, 6, true, 1)
-_SPIRV_OP(GroupNonUniformUMin, true, 6, true, 1)
-_SPIRV_OP(GroupNonUniformFMin, true, 6, true, 1)
-_SPIRV_OP(GroupNonUniformSMax, true, 6, true, 1)
-_SPIRV_OP(GroupNonUniformUMax, true, 6, true, 1)
-_SPIRV_OP(GroupNonUniformFMax, true, 6, true, 1)
-_SPIRV_OP(GroupNonUniformBitwiseAnd, true, 6, true, 1)
-_SPIRV_OP(GroupNonUniformBitwiseOr, true, 6, true, 1)
-_SPIRV_OP(GroupNonUniformBitwiseXor, true, 6, true, 1)
-_SPIRV_OP(GroupNonUniformLogicalAnd, true, 6, true, 1)
-_SPIRV_OP(GroupNonUniformLogicalOr, true, 6, true, 1)
-_SPIRV_OP(GroupNonUniformLogicalXor, true, 6, true, 1)
+#define _SPIRV_OP(x, ...) typedef SPIRVGroupNonUniformArithmeticInst<Op##x> SPIRV##x;
+_SPIRV_OP(GroupNonUniformIAdd)
+_SPIRV_OP(GroupNonUniformFAdd)
+_SPIRV_OP(GroupNonUniformIMul)
+_SPIRV_OP(GroupNonUniformFMul)
+_SPIRV_OP(GroupNonUniformSMin)
+_SPIRV_OP(GroupNonUniformUMin)
+_SPIRV_OP(GroupNonUniformFMin)
+_SPIRV_OP(GroupNonUniformSMax)
+_SPIRV_OP(GroupNonUniformUMax)
+_SPIRV_OP(GroupNonUniformFMax)
+_SPIRV_OP(GroupNonUniformBitwiseAnd)
+_SPIRV_OP(GroupNonUniformBitwiseOr)
+_SPIRV_OP(GroupNonUniformBitwiseXor)
+_SPIRV_OP(GroupNonUniformLogicalAnd)
+_SPIRV_OP(GroupNonUniformLogicalOr)
+_SPIRV_OP(GroupNonUniformLogicalXor)
 #undef _SPIRV_OP
 
-class SPIRVGroupNonUniformShuffleInst : public SPIRVInstTemplateBase {
+template <Op OC_> class SPIRVGroupNonUniformShuffleInst : public SPIRVInstruction {
 public:
-  SPIRVCapVec getRequiredCapability() const override {
-    return getVec(CapabilityGroupNonUniformShuffle);
+  const static Op OC = OC_;
+  // Complete constructor
+  SPIRVGroupNonUniformShuffleInst(SPIRVId TheId, SPIRVValue *scope_, SPIRVValue *val_, SPIRVValue *lane_idx_delta_or_mask_, SPIRVBasicBlock *TheBB)
+      : SPIRVInstruction(6, OC, val_->getType(), TheId, TheBB),
+        val(val_->getId()), scope(scope_->getId()), lane_idx_delta_or_mask(lane_idx_delta_or_mask_->getId()) {
+    validate();
+    assert(TheBB && "Invalid BB");
+    if (OC == OpGroupNonUniformShuffle || OC == OpGroupNonUniformShuffleXor) {
+      Module->addCapability(CapabilityGroupNonUniformShuffle);
+    } else {
+      Module->addCapability(CapabilityGroupNonUniformShuffleRelative);
+    }
   }
+  // Incomplete constructor
+  SPIRVGroupNonUniformShuffleInst() : SPIRVInstruction(OC), val(SPIRVID_INVALID), scope(SPIRVID_INVALID), lane_idx_delta_or_mask(SPIRVID_INVALID) {}
+
+  _SPIRV_DEF_ENCDEC5(Type, Id, scope, val, lane_idx_delta_or_mask)
+
+protected:
+  void validate() const override { SPIRVInstruction::validate(); }
+  SPIRVId val;
+  SPIRVId scope;
+  SPIRVId lane_idx_delta_or_mask;
 };
 
-#define _SPIRV_OP(x, ...)                                                      \
-  typedef SPIRVInstTemplate<SPIRVGroupNonUniformShuffleInst, Op##x,            \
-                            __VA_ARGS__>                                       \
-      SPIRV##x;
-_SPIRV_OP(GroupNonUniformShuffle, true, 6)
-_SPIRV_OP(GroupNonUniformShuffleXor, true, 6)
-#undef _SPIRV_OP
-
-class SPIRVGroupNonUniformShuffleRelativeInst : public SPIRVInstTemplateBase {
-public:
-  SPIRVCapVec getRequiredCapability() const override {
-    return getVec(CapabilityGroupNonUniformShuffleRelative);
-  }
-};
-
-#define _SPIRV_OP(x, ...)                                                      \
-  typedef SPIRVInstTemplate<SPIRVGroupNonUniformShuffleRelativeInst, Op##x,    \
-                            __VA_ARGS__>                                       \
-      SPIRV##x;
-_SPIRV_OP(GroupNonUniformShuffleUp, true, 6)
-_SPIRV_OP(GroupNonUniformShuffleDown, true, 6)
+#define _SPIRV_OP(x, ...) typedef SPIRVGroupNonUniformShuffleInst<Op##x> SPIRV##x;
+_SPIRV_OP(GroupNonUniformShuffle)
+_SPIRV_OP(GroupNonUniformShuffleXor)
+_SPIRV_OP(GroupNonUniformShuffleUp)
+_SPIRV_OP(GroupNonUniformShuffleDown)
 #undef _SPIRV_OP
 
 class SPIRVBlockingPipesIntelInst : public SPIRVInstTemplateBase {

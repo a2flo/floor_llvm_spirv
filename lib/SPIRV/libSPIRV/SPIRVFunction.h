@@ -101,6 +101,7 @@ public:
   SPIRVWord getFuncCtlMask() const { return FCtrlMask; }
   size_t getNumBasicBlock() const { return BBVec.size(); }
   SPIRVBasicBlock *getBasicBlock(size_t I) const { return BBVec[I]; }
+  auto &getBasicBlocks() { return BBVec; }
   size_t getNumArguments() const {
     return getFunctionType()->getNumParameters();
   }

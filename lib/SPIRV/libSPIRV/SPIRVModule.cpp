@@ -95,7 +95,7 @@ public:
   // Object query functions
   bool exist(SPIRVId) const override;
   bool exist(SPIRVId, SPIRVEntry **) const override;
-  SPIRVId getId(SPIRVId Id = SPIRVID_INVALID, unsigned Increment = 1);
+  SPIRVId getId(SPIRVId Id = SPIRVID_INVALID, unsigned Increment = 1) override;
   SPIRVEntry *getEntry(SPIRVId Id) const override;
   // If we have at least on OpLine in the module the CurrentLine is non-empty
   bool hasDebugInfo() const override {
@@ -124,9 +124,11 @@ public:
   }
   std::set<std::string> &getExtension() override { return SPIRVExt; }
   SPIRVFunction *getFunction(unsigned I) const override { return FuncVec[I]; }
+  std::vector<SPIRVFunction *> &getFunctions() override { return FuncVec; }
   SPIRVVariable *getVariable(unsigned I) const override {
     return VariableVec[I];
   }
+  std::vector<SPIRVVariable *> &getVariables() override { return VariableVec; }
   SPIRVValue *getValue(SPIRVId TheId) const override;
   std::vector<SPIRVValue *>
   getValues(const std::vector<SPIRVId> &) const override;
@@ -382,9 +384,16 @@ public:
   SPIRVInstruction *addGroupInst(Op OpCode, SPIRVType *Type, Scope Scope,
                                  const std::vector<SPIRVValue *> &Ops,
                                  SPIRVBasicBlock *BB) override;
-  virtual SPIRVInstruction *
+  SPIRVInstruction *addGroupNonUniformArithmeticInst(
+      Op OpCode, spv::Scope scope, spv::GroupOperation group_op,
+      SPIRVValue *val, SPIRVBasicBlock *BB) override;
+  SPIRVInstruction *
+  addGroupNonUniformShuffleInst(Op OpCode, spv::Scope scope, SPIRVValue *val,
+                                SPIRVValue *lane_idx_delta_or_mask,
+                                SPIRVBasicBlock *BB) override;
+  SPIRVInstruction *
   addInstruction(SPIRVInstruction *Inst, SPIRVBasicBlock *BB,
-                 SPIRVInstruction *InsertBefore = nullptr);
+                 SPIRVInstruction *InsertBefore = nullptr) override;
   SPIRVInstTemplateBase *addInstTemplate(Op OC, SPIRVBasicBlock *BB,
                                          SPIRVType *Ty) override;
   SPIRVInstTemplateBase *addInstTemplate(Op OC,
@@ -574,12 +583,9 @@ private:
   std::map<float, SPIRVConstant *> FloatLiteralMap;
   std::map<double, SPIRVConstant *> DoubleLiteralMap;
   std::map<uint32_t, SPIRVTypeFloat *> FloatTypeMap;
-  std::map<std::pair<SPIRVType *, uint32_t>, SPIRVTypeVector *>
-      VectorTypeMap;
-  std::map<std::pair<SPIRVType *, uint32_t>, SPIRVTypePointer *>
-      PointerTypeMap;
-  std::map<SPIRVTypeImage *, SPIRVTypeSampledImage *>
-      SampledImageTypeMap;
+  std::map<std::pair<SPIRVType *, uint32_t>, SPIRVTypeVector *> VectorTypeMap;
+  std::map<std::pair<SPIRVType *, uint32_t>, SPIRVTypePointer *> PointerTypeMap;
+  std::map<SPIRVTypeImage *, SPIRVTypeSampledImage *> SampledImageTypeMap;
 
   struct image_type_info {
     // -> info
@@ -1476,6 +1482,100 @@ SPIRVModuleImpl::addGroupInst(Op OpCode, SPIRVType *Type, Scope Scope,
   return addInstTemplate(OpCode, WordOps, BB, Type);
 }
 
+SPIRVInstruction *SPIRVModuleImpl::addGroupNonUniformArithmeticInst(
+    Op OpCode, spv::Scope scope, spv::GroupOperation group_op, SPIRVValue *val,
+    SPIRVBasicBlock *BB) {
+  const auto scope_id = getLiteralAsConstant(scope, true);
+  switch (OpCode) {
+  case spv::OpGroupNonUniformIAdd:
+    return addInstruction(
+        new SPIRVGroupNonUniformIAdd(getId(), scope_id, group_op, val, BB), BB);
+  case spv::OpGroupNonUniformFAdd:
+    return addInstruction(
+        new SPIRVGroupNonUniformFAdd(getId(), scope_id, group_op, val, BB), BB);
+  case spv::OpGroupNonUniformIMul:
+    return addInstruction(
+        new SPIRVGroupNonUniformIMul(getId(), scope_id, group_op, val, BB), BB);
+  case spv::OpGroupNonUniformFMul:
+    return addInstruction(
+        new SPIRVGroupNonUniformFMul(getId(), scope_id, group_op, val, BB), BB);
+  case spv::OpGroupNonUniformSMin:
+    return addInstruction(
+        new SPIRVGroupNonUniformSMin(getId(), scope_id, group_op, val, BB), BB);
+  case spv::OpGroupNonUniformUMin:
+    return addInstruction(
+        new SPIRVGroupNonUniformUMin(getId(), scope_id, group_op, val, BB), BB);
+  case spv::OpGroupNonUniformFMin:
+    return addInstruction(
+        new SPIRVGroupNonUniformFMin(getId(), scope_id, group_op, val, BB), BB);
+  case spv::OpGroupNonUniformSMax:
+    return addInstruction(
+        new SPIRVGroupNonUniformSMax(getId(), scope_id, group_op, val, BB), BB);
+  case spv::OpGroupNonUniformUMax:
+    return addInstruction(
+        new SPIRVGroupNonUniformUMax(getId(), scope_id, group_op, val, BB), BB);
+  case spv::OpGroupNonUniformFMax:
+    return addInstruction(
+        new SPIRVGroupNonUniformFMax(getId(), scope_id, group_op, val, BB), BB);
+  case spv::OpGroupNonUniformBitwiseAnd:
+    return addInstruction(new SPIRVGroupNonUniformBitwiseAnd(getId(), scope_id,
+                                                             group_op, val, BB),
+                          BB);
+  case spv::OpGroupNonUniformBitwiseOr:
+    return addInstruction(
+        new SPIRVGroupNonUniformBitwiseOr(getId(), scope_id, group_op, val, BB),
+        BB);
+  case spv::OpGroupNonUniformBitwiseXor:
+    return addInstruction(new SPIRVGroupNonUniformBitwiseXor(getId(), scope_id,
+                                                             group_op, val, BB),
+                          BB);
+  case spv::OpGroupNonUniformLogicalAnd:
+    return addInstruction(new SPIRVGroupNonUniformLogicalAnd(getId(), scope_id,
+                                                             group_op, val, BB),
+                          BB);
+  case spv::OpGroupNonUniformLogicalOr:
+    return addInstruction(
+        new SPIRVGroupNonUniformLogicalOr(getId(), scope_id, group_op, val, BB),
+        BB);
+  case spv::OpGroupNonUniformLogicalXor:
+    return addInstruction(new SPIRVGroupNonUniformLogicalXor(getId(), scope_id,
+                                                             group_op, val, BB),
+                          BB);
+  default:
+    llvm_unreachable("invalid group-non-uniform opcode");
+  }
+}
+
+SPIRVInstruction *SPIRVModuleImpl::addGroupNonUniformShuffleInst(
+    Op OpCode, spv::Scope scope, SPIRVValue *val,
+    SPIRVValue *lane_idx_delta_or_mask, SPIRVBasicBlock *BB) {
+  const auto scope_id = getLiteralAsConstant(scope, true);
+  switch (OpCode) {
+  case spv::OpGroupNonUniformShuffle:
+    return addInstruction(
+        new SPIRVGroupNonUniformShuffle(getId(), scope_id, val,
+                                        lane_idx_delta_or_mask, BB),
+        BB);
+  case spv::OpGroupNonUniformShuffleXor:
+    return addInstruction(
+        new SPIRVGroupNonUniformShuffleXor(getId(), scope_id, val,
+                                           lane_idx_delta_or_mask, BB),
+        BB);
+  case spv::OpGroupNonUniformShuffleUp:
+    return addInstruction(
+        new SPIRVGroupNonUniformShuffleUp(getId(), scope_id, val,
+                                          lane_idx_delta_or_mask, BB),
+        BB);
+  case spv::OpGroupNonUniformShuffleDown:
+    return addInstruction(
+        new SPIRVGroupNonUniformShuffleDown(getId(), scope_id, val,
+                                            lane_idx_delta_or_mask, BB),
+        BB);
+  default:
+    llvm_unreachable("invalid group-non-uniform opcode");
+  }
+}
+
 SPIRVInstruction *
 SPIRVModuleImpl::addInstruction(SPIRVInstruction *Inst, SPIRVBasicBlock *BB,
                                 SPIRVInstruction *InsertBefore) {
@@ -1683,11 +1783,13 @@ SPIRVInstruction *SPIRVModuleImpl::addLifetimeInst(Op OC, SPIRVValue *Object,
 SPIRVInstruction *SPIRVModuleImpl::addMemoryBarrierInst(Scope ScopeKind,
                                                         SPIRVWord MemFlag,
                                                         SPIRVBasicBlock *BB) {
-  return addInstruction(SPIRVInstTemplateBase::create(
-                            OpMemoryBarrier, nullptr, SPIRVID_INVALID,
-                            getVec(static_cast<SPIRVWord>(ScopeKind), MemFlag),
-                            BB, this),
-                        BB);
+  return addInstruction(
+      SPIRVInstTemplateBase::create(
+          OpMemoryBarrier, nullptr, SPIRVID_INVALID,
+          getVec(getLiteralAsConstant(ScopeKind, true)->getId(),
+                 getLiteralAsConstant(MemFlag, true)->getId()),
+          BB, this),
+      BB);
 }
 
 SPIRVInstruction *SPIRVModuleImpl::addSelectInst(SPIRVValue *Condition,
@@ -1724,10 +1826,10 @@ SPIRVInstruction *SPIRVModuleImpl::addLoopMergeInst(
   if (term_instr && !term_instr->isTerminationInstruction()) {
     term_instr = nullptr;
   }
-  return addInstruction(
-      new SPIRVLoopMerge(MergeBlock, ContinueTarget, LoopControl,
-                         LoopControlParameters, BB),
-      BB, term_instr);
+  return addInstruction(new SPIRVLoopMerge(MergeBlock, ContinueTarget,
+                                           LoopControl, LoopControlParameters,
+                                           BB),
+                        BB, term_instr);
 }
 
 SPIRVInstruction *SPIRVModuleImpl::addLoopControlINTELInst(

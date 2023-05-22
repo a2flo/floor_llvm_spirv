@@ -266,6 +266,9 @@ private:
   transVulkanImageFunction(CallInst *CI, SPIRVBasicBlock *BB,
                            const std::string &DemangledName);
 
+  SPIRVValue *add_libfloor_sub_group_op(StringRef MangledName, CallInst *CI, SPIRVBasicBlock *BB);
+  SPIRVValue *add_libfloor_sub_group_simd_shuffle(StringRef MangledName, CallInst *CI, SPIRVBasicBlock *BB);
+
   // function image arg -> image type map
   std::unordered_map<const llvm::Value *, SPIRVType *> image_type_map;
 };

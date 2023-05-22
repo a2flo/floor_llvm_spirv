@@ -58,6 +58,7 @@ public:
   SPIRVFunction *getParent() const { return ParentF; }
   size_t getNumInst() const { return InstVec.size(); }
   SPIRVInstruction *getInst(size_t I) const { return InstVec[I]; }
+  auto &getInstructions() { return InstVec; }
   SPIRVInstruction *getPrevious(const SPIRVInstruction *I) const {
     auto Loc = find(I);
     if (Loc == InstVec.end() || Loc == InstVec.begin())

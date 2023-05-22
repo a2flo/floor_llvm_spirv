@@ -116,6 +116,8 @@ public:
   template <class T> T *get(SPIRVId Id) const {
     return static_cast<T *>(getEntry(Id));
   }
+  virtual SPIRVId getId(SPIRVId Id = SPIRVID_INVALID,
+                        unsigned Increment = 1) = 0;
   virtual SPIRVEntry *getEntry(SPIRVId) const = 0;
   virtual bool hasDebugInfo() const = 0;
 
@@ -140,7 +142,9 @@ public:
   getEntryPointIO() const = 0;
   virtual std::set<std::string> &getExtension() = 0;
   virtual SPIRVFunction *getFunction(unsigned) const = 0;
+  virtual std::vector<SPIRVFunction *> &getFunctions() = 0;
   virtual SPIRVVariable *getVariable(unsigned) const = 0;
+  virtual std::vector<SPIRVVariable *> &getVariables() = 0;
   virtual SPIRVMemoryModelKind getMemoryModel() const = 0;
   virtual unsigned getNumFunctions() const = 0;
   virtual unsigned getNumEntryPoints(SPIRVExecutionModelKind) const = 0;
@@ -157,7 +161,8 @@ public:
   virtual SPIRVType *getValueType(SPIRVId TheId) const = 0;
   virtual std::vector<SPIRVType *>
   getValueTypes(const std::vector<SPIRVId> &) const = 0;
-  virtual SPIRVConstant *getLiteralAsConstant(unsigned Literal, bool is_signed) = 0;
+  virtual SPIRVConstant *getLiteralAsConstant(unsigned Literal,
+                                              bool is_signed) = 0;
   virtual SPIRVConstant *getLiteralAsConstant(float Literal) = 0;
   virtual SPIRVConstant *getLiteralAsConstant(double Literal) = 0;
   virtual bool isEntryPoint(SPIRVExecutionModelKind, SPIRVId) const = 0;
@@ -379,6 +384,17 @@ public:
                                          Scope Scope,
                                          const std::vector<SPIRVValue *> &Ops,
                                          SPIRVBasicBlock *BB) = 0;
+  virtual SPIRVInstruction *
+  addGroupNonUniformArithmeticInst(Op OpCode, spv::Scope scope,
+                                   spv::GroupOperation group_op,
+                                   SPIRVValue *val, SPIRVBasicBlock *BB) = 0;
+  virtual SPIRVInstruction *
+  addGroupNonUniformShuffleInst(Op OpCode, spv::Scope scope, SPIRVValue *val,
+                                SPIRVValue *lane_idx_delta_or_mask,
+                                SPIRVBasicBlock *BB) = 0;
+  virtual SPIRVInstruction *
+  addInstruction(SPIRVInstruction *Inst, SPIRVBasicBlock *BB,
+                 SPIRVInstruction *InsertBefore = nullptr) = 0;
   virtual SPIRVInstTemplateBase *addInstTemplate(Op OC, SPIRVBasicBlock *BB,
                                                  SPIRVType *Ty) = 0;
   virtual SPIRVInstTemplateBase *
@@ -583,7 +599,6 @@ protected:
 private:
   bool IsValid;
 };
-
 
 #ifdef _SPIRV_SUPPORT_TEXT_FMT
 

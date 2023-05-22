@@ -3852,6 +3852,205 @@ SPIRVValue *LLVMToSPIRVBase::transCallInst(CallInst *CI, SPIRVBasicBlock *BB) {
   return transDirectCallInst(CI, BB);
 }
 
+SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_simd_shuffle(
+    StringRef MangledName, CallInst *CI, SPIRVBasicBlock *BB) {
+  if (CI->getNumOperands() < 2) {
+    assert(false &&
+           "invalid amount of operands in libfloor sub-group simd-shuffle");
+    return nullptr;
+  }
+
+  // get shuffle type
+  Op opcode = spv::OpNop;
+  if (MangledName.consume_front("simd_shuffle.")) {
+    opcode = spv::OpGroupNonUniformShuffle;
+  } else if (MangledName.consume_front("simd_shuffle_xor.")) {
+    opcode = spv::OpGroupNonUniformShuffleUp;
+  } else if (MangledName.consume_front("simd_shuffle_down.")) {
+    opcode = spv::OpGroupNonUniformShuffleDown;
+  } else if (MangledName.consume_front("simd_shuffle_up.")) {
+    opcode = spv::OpGroupNonUniformShuffleUp;
+  } else {
+    assert(false && "invalid sub-group simd-shuffle");
+    return nullptr;
+  }
+
+  // translate value and handle type
+  auto lane_value = CI->getOperand(0);
+  auto spv_lane_value = transValue(lane_value, BB);
+  auto shuffle_op_type = spv_lane_value->getType();
+
+  if (MangledName.endswith("s32") || MangledName.endswith("u32")) {
+    if (!shuffle_op_type->isTypeInt()) {
+      assert(false && "expected integer type");
+      return nullptr;
+    }
+  } else if (MangledName.endswith("f32")) {
+    if (!shuffle_op_type->isTypeFloat()) {
+      assert(false && "expected float type");
+      return nullptr;
+    }
+  } else {
+    assert(false && "invalid data type");
+    return nullptr;
+  }
+
+  // idx/delta/mask *must* be unsigned
+  auto lane_idx_delta_or_mask = CI->getOperand(1);
+  SPIRVValue *spv_lane_idx_delta_or_mask = nullptr;
+  if (auto const_lane_idx_delta_or_mask =
+          dyn_cast_or_null<ConstantInt>(lane_idx_delta_or_mask);
+      const_lane_idx_delta_or_mask) {
+    // if it is a constant, we can directly emit the SPIR-V constant as unsinged
+    spv_lane_idx_delta_or_mask = BM->getLiteralAsConstant(
+        uint32_t(const_lane_idx_delta_or_mask->getZExtValue()), false);
+  } else {
+    // if it is dynamic, we must bitcast to unsigned if it's not unsigned
+    spv_lane_idx_delta_or_mask = transValue(lane_idx_delta_or_mask, BB);
+    assert(spv_lane_idx_delta_or_mask->getType()->isTypeInt());
+    const auto int_type =
+        (const SPIRVTypeInt *)spv_lane_idx_delta_or_mask->getType();
+    if (int_type->isSigned()) {
+      spv_lane_idx_delta_or_mask =
+          BM->addUnaryInst(spv::OpBitcast, int_type->getUnsigned(),
+                           spv_lane_idx_delta_or_mask, BB);
+    }
+  }
+
+  return BM->addGroupNonUniformShuffleInst(opcode, spv::ScopeSubgroup,
+                                           spv_lane_value,
+                                           spv_lane_idx_delta_or_mask, BB);
+}
+
+SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_op(StringRef MangledName,
+                                                       CallInst *CI,
+                                                       SPIRVBasicBlock *BB) {
+  if (!MangledName.consume_front("floor.sub_group.")) {
+    assert(false && "this is not a libfloor sub-group operation");
+    return nullptr;
+  }
+
+  // extract algorithm
+  if (MangledName.startswith("simd_shuffle")) {
+    return add_libfloor_sub_group_simd_shuffle(MangledName, CI, BB);
+  }
+
+  if (CI->getNumOperands() == 0) {
+    assert(false &&
+           "invalid amount of operands in libfloor sub-group operation");
+    return nullptr;
+  }
+
+  auto group_op = spv::GroupOperationMax;
+  if (MangledName.consume_front("reduce.")) {
+    group_op = spv::GroupOperationReduce;
+  } else if (MangledName.consume_front("inclusive_scan.")) {
+    group_op = spv::GroupOperationInclusiveScan;
+  } else if (MangledName.consume_front("exclusive_scan.")) {
+    group_op = spv::GroupOperationExclusiveScan;
+  } else {
+    assert(false && "invalid sub-group algorithm");
+    return nullptr;
+  }
+
+  // extract op
+  Op opcode = spv::OpNop;
+  if (MangledName.consume_front("add.")) {
+    opcode = spv::OpGroupNonUniformIAdd;
+  } else if (MangledName.consume_front("min.")) {
+    opcode = spv::OpGroupNonUniformSMin;
+  } else if (MangledName.consume_front("max.")) {
+    opcode = spv::OpGroupNonUniformSMax;
+  } else {
+    assert(false && "invalid sub-group op");
+    return nullptr;
+  }
+
+  // translate value and handle type
+  auto item_value = CI->getOperand(0);
+  auto spv_item_value = transValue(item_value, BB);
+  auto group_op_type = spv_item_value->getType();
+
+  if (MangledName.endswith("s32")) {
+    if (!group_op_type->isTypeInt()) {
+      assert(false && "expected integer type");
+      return nullptr;
+    }
+    const auto int_type = (const SPIRVTypeInt *)group_op_type;
+    if (int_type->getBitWidth() != 32) {
+      assert(false && "sub-group ops only support 32-bit types");
+      return nullptr;
+    }
+    // depending on the op, we may need to perform type conversion
+    if (opcode != spv::OpGroupNonUniformIAdd && !int_type->isSigned()) {
+      spv_item_value = BM->addUnaryInst(spv::OpBitcast, int_type->getSigned(),
+                                        spv_item_value, BB);
+      group_op_type = spv_item_value->getType();
+    }
+
+    // NOTE: opcode is already correct here
+  } else if (MangledName.endswith("u32")) {
+    if (!group_op_type->isTypeInt()) {
+      assert(false && "expected integer type");
+      return nullptr;
+    }
+    const auto int_type = (const SPIRVTypeInt *)group_op_type;
+    if (int_type->getBitWidth() != 32) {
+      assert(false && "sub-group ops only support 32-bit types");
+      return nullptr;
+    }
+    // depending on the op, we may need to perform type conversion
+    if (opcode != spv::OpGroupNonUniformIAdd && int_type->isSigned()) {
+      spv_item_value = BM->addUnaryInst(spv::OpBitcast, int_type->getUnsigned(),
+                                        spv_item_value, BB);
+      group_op_type = spv_item_value->getType();
+    }
+
+    switch (opcode) {
+    case spv::OpGroupNonUniformIAdd:
+      // stays the same
+      break;
+    case spv::OpGroupNonUniformSMin:
+      opcode = spv::OpGroupNonUniformUMin;
+      break;
+    case spv::OpGroupNonUniformSMax:
+      opcode = spv::OpGroupNonUniformUMax;
+      break;
+    default:
+      break;
+    }
+  } else if (MangledName.endswith("f32")) {
+    if (!group_op_type->isTypeFloat()) {
+      assert(false && "expected float type");
+      return nullptr;
+    }
+    if (((const SPIRVTypeFloat *)group_op_type)->getBitWidth() != 32) {
+      assert(false && "sub-group ops only support 32-bit types");
+      return nullptr;
+    }
+
+    switch (opcode) {
+    case spv::OpGroupNonUniformIAdd:
+      opcode = spv::OpGroupNonUniformFAdd;
+      break;
+    case spv::OpGroupNonUniformSMin:
+      opcode = spv::OpGroupNonUniformFMin;
+      break;
+    case spv::OpGroupNonUniformSMax:
+      opcode = spv::OpGroupNonUniformFMax;
+      break;
+    default:
+      break;
+    }
+  } else {
+    assert(false && "invalid data type");
+    return nullptr;
+  }
+
+  return BM->addGroupNonUniformArithmeticInst(opcode, spv::ScopeSubgroup,
+                                              group_op, spv_item_value, BB);
+}
+
 SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
                                                  SPIRVBasicBlock *BB) {
   SPIRVExtInstSetKind ExtSetKind = SPIRVEIS_Count;
@@ -4102,6 +4301,32 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
                                 BB);
       }
       // else: fallthrough
+    } else if (MangledName.startswith("floor.sub_group.")) {
+      return add_libfloor_sub_group_op(MangledName, CI, BB);
+    } else if (MangledName == "floor.barrier.local") {
+      const auto wg_scope = BM->getLiteralAsConstant(spv::ScopeWorkgroup, true);
+      const auto wg_sema =
+          BM->getLiteralAsConstant(spv::MemorySemanticsAcquireReleaseMask |
+                                       spv::MemorySemanticsUniformMemoryMask |
+                                       spv::MemorySemanticsSubgroupMemoryMask |
+                                       spv::MemorySemanticsWorkgroupMemoryMask |
+                                       spv::MemorySemanticsImageMemoryMask,
+                                   true);
+      return BM->addControlBarrierInst(wg_scope, wg_scope, wg_sema, BB);
+    } else if (MangledName == "floor.barrier.global" ||
+               MangledName == "floor.barrier.full" ||
+               MangledName == "floor.barrier.image") {
+      // TODO: do we need to differentiate between global and full?
+      // NOTE: for now, an image barrier equals a full/global barrier
+      const auto wg_scope = BM->getLiteralAsConstant(spv::ScopeDevice, true);
+      const auto wg_sema =
+          BM->getLiteralAsConstant(spv::MemorySemanticsAcquireReleaseMask |
+                                       spv::MemorySemanticsUniformMemoryMask |
+                                       spv::MemorySemanticsSubgroupMemoryMask |
+                                       spv::MemorySemanticsWorkgroupMemoryMask |
+                                       spv::MemorySemanticsImageMemoryMask,
+                                   true);
+      return BM->addControlBarrierInst(wg_scope, wg_scope, wg_sema, BB);
     }
     errs() << "unhandled floor func: " << MangledName << "\n";
   }
@@ -4190,10 +4415,12 @@ bool LLVMToSPIRVBase::transAddressingMode() {
     BM->addCapability(CapabilityPhysicalStorageBufferAddresses);
     BM->addCapability(CapabilityVariablePointersStorageBuffer);
     BM->addCapability(CapabilityVariablePointers);
-    BM->addCapability(CapabilityUniformBufferArrayDynamicIndexing);
-    BM->addCapability(CapabilityStorageBufferArrayDynamicIndexing);
-    BM->addCapability(CapabilitySampledImageArrayDynamicIndexing);
-    BM->addCapability(CapabilityStorageImageArrayDynamicIndexing);
+    BM->addCapability(CapabilityUniformBufferArrayNonUniformIndexing);
+    BM->addCapability(CapabilityStorageBufferArrayNonUniformIndexing);
+    BM->addCapability(CapabilitySampledImageArrayNonUniformIndexing);
+    BM->addCapability(CapabilityStorageImageArrayNonUniformIndexing);
+    BM->addCapability(CapabilityShaderNonUniform);
+    BM->addCapability(CapabilityGroupNonUniform);
   }
   return true;
 }
@@ -5202,6 +5429,10 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           {"instance_index", spv::BuiltInInstanceIndex},
           {"view_index", spv::BuiltInViewIndex},
           {"barycentric_coord", spv::BuiltInBaryCoordKHR},
+          {"sub_group_id", spv::BuiltInSubgroupId},
+          {"sub_group_local_id", spv::BuiltInSubgroupLocalInvocationId},
+          {"sub_group_size", spv::BuiltInSubgroupSize},
+          {"num_sub_groups", spv::BuiltInNumSubgroups},
       };
       const auto iter = builtin_lut.find(str);
       if (iter == builtin_lut.end()) {
@@ -5265,12 +5496,8 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
               //{ spv::BuiltInEnqueuedWorkgroupSize, VULKAN_STAGE::NONE },
               //{ spv::BuiltInGlobalOffset, VULKAN_STAGE::NONE },
               //{ spv::BuiltInGlobalLinearId, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInSubgroupSize, VULKAN_STAGE::NONE },
               //{ spv::BuiltInSubgroupMaxSize, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInNumSubgroups, VULKAN_STAGE::NONE },
               //{ spv::BuiltInNumEnqueuedSubgroups, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInSubgroupId, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInSubgroupLocalInvocationId, VULKAN_STAGE::NONE },
               {spv::BuiltInVertexIndex, VULKAN_STAGE::VERTEX},
               {spv::BuiltInInstanceIndex, VULKAN_STAGE::VERTEX},
               {spv::BuiltInViewIndex,
@@ -5278,6 +5505,10 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
                 VULKAN_STAGE::TESSELLATION_EVALUATION | VULKAN_STAGE::GEOMETRY |
                 VULKAN_STAGE::FRAGMENT)},
               {spv::BuiltInBaryCoordKHR, VULKAN_STAGE::FRAGMENT},
+              {spv::BuiltInSubgroupId, VULKAN_STAGE::KERNEL},
+              {spv::BuiltInSubgroupLocalInvocationId, VULKAN_STAGE::KERNEL},
+              {spv::BuiltInSubgroupSize, VULKAN_STAGE::KERNEL},
+              {spv::BuiltInNumSubgroups, VULKAN_STAGE::KERNEL},
           };
       static const std::unordered_map<spv::BuiltIn, VULKAN_STAGE>
           builtin_validity_output_lut{
@@ -5329,12 +5560,8 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
               //{ spv::BuiltInEnqueuedWorkgroupSize, VULKAN_STAGE::NONE },
               //{ spv::BuiltInGlobalOffset, VULKAN_STAGE::NONE },
               //{ spv::BuiltInGlobalLinearId, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInSubgroupSize, VULKAN_STAGE::NONE },
               //{ spv::BuiltInSubgroupMaxSize, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInNumSubgroups, VULKAN_STAGE::NONE },
               //{ spv::BuiltInNumEnqueuedSubgroups, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInSubgroupId, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInSubgroupLocalInvocationId, VULKAN_STAGE::NONE },
               {spv::BuiltInVertexIndex, VULKAN_STAGE::NONE},
               {spv::BuiltInInstanceIndex, VULKAN_STAGE::NONE},
               {spv::BuiltInViewIndex, VULKAN_STAGE::NONE},
@@ -6047,6 +6274,23 @@ bool LLVMToSPIRVBase::translate() {
     return false;
   if (!transExecutionMode())
     return false;
+
+#if 0 // for testing purposes: mark everything as NonUniform
+	for (auto& func : BM->getFunctions()) {
+		for (auto& BB : func->getBasicBlocks()) {
+			for (auto& instr : BB->getInstructions()) {
+				if (instr->hasType() && !instr->getType()->isTypeVoid()) {
+					instr->addDecorate(DecorationNonUniform);
+				}
+			}
+		}
+	}
+	for (auto& var : BM->getVariables()) {
+		if (var->hasType() && !var->getType()->isTypeVoid()) {
+			var->addDecorate(DecorationNonUniform);
+		}
+	}
+#endif
 
   BM->resolveUnknownStructFields();
   DbgTran->transDebugMetadata();
