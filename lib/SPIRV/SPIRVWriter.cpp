@@ -3157,10 +3157,12 @@ static SPIRVWord getBuiltinIdForIntrinsicGLSL(Intrinsic::ID IID) {
   case Intrinsic::abs:
     return GLSLLIB::SAbs;
   case Intrinsic::ctlz:
-  case Intrinsic::cttz:
-    assert(false && "ctz/clz are not supported with GLSL/Vulkan - use libfloor "
+    assert(false && "clz is not supported with GLSL/Vulkan - use libfloor "
                     "wrappers instead");
     return 0;
+  case Intrinsic::cttz:
+    // not fully usable, but good enough
+    return GLSLLIB::FindILsb;
   case Intrinsic::copysign:
   case Intrinsic::log10:
   case Intrinsic::powi:
@@ -5409,8 +5411,8 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           //{ "workgroup_size", spv::BuiltInWorkgroupSize }, // NOTE: must be a
           // constant or spec constant
           {"workgroup_id", spv::BuiltInWorkgroupId},
-          {"local_invocation_id", spv::BuiltInLocalInvocationId},
-          {"global_invocation_id", spv::BuiltInGlobalInvocationId},
+          //{"local_invocation_id", spv::BuiltInLocalInvocationId},
+          //{"global_invocation_id", spv::BuiltInGlobalInvocationId},
           // OpenCL-only:
           //{ "local_invocation_index", spv::BuiltInLocalInvocationIndex },
           //{ "work_dim", spv::BuiltInWorkDim },
@@ -6008,57 +6010,65 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
 
     // set compute shader constant work-group size
     if (F->getCallingConv() == llvm::CallingConv::FLOOR_KERNEL) {
-      const auto global_name = func_name + ".vulkan_constant.local_size";
-      auto gv_wg_size = M->getNamedGlobal(global_name);
-
-      // NOTE: 128 is the minimum value that has to be supported for x
-      uint32_t default_wg_size_vals[3]{128, 1, 1};
-      // use user-specified local/work-group size if there is any
       if (MDNode *WGSize = F->getMetadata(kSPIR2MD::WGSize); WGSize) {
-        decodeMDNode(WGSize, default_wg_size_vals[0], default_wg_size_vals[1],
-                     default_wg_size_vals[2]);
-      }
-      auto uint_type = BM->addIntegerType(32, false);
-      auto uint3_type = BM->addVectorType(uint_type, 3);
-      std::vector<SPIRVValue *> wg_size_vals{
-          BM->addSpecIntegerConstant(uint_type, default_wg_size_vals[0]),
-          BM->addSpecIntegerConstant(uint_type, default_wg_size_vals[1]),
-          BM->addSpecIntegerConstant(uint_type, default_wg_size_vals[2]),
-      };
-      auto wg_size = BM->addSpecCompositeConstant(uint3_type, wg_size_vals);
-      BM->setName(wg_size, global_name);
-      BF->addExecutionMode(new SPIRVExecutionModeId(
-          BF, spv::ExecutionModeLocalSizeId, wg_size_vals[0]->getId(),
-          wg_size_vals[1]->getId(), wg_size_vals[2]->getId()));
+        // -> constant/required user-specified local/work-group size
+        uint32_t constant_wg_size_vals[3]{1, 1, 1};
+        decodeMDNode(WGSize, constant_wg_size_vals[0], constant_wg_size_vals[1],
+                     constant_wg_size_vals[2]);
+        BF->addExecutionMode(new SPIRVExecutionMode(
+            BF, spv::ExecutionModeLocalSize, constant_wg_size_vals[0],
+            constant_wg_size_vals[1], constant_wg_size_vals[2]));
+      } else {
+        // -> any local/work-group size (allow specialization)
+        const auto global_name = func_name + ".vulkan_constant.local_size";
+        auto gv_wg_size = M->getNamedGlobal(global_name);
 
-      // set work-group size (x, y, z) spec ids to 1, 2 and 3
-      // NOTE: we're starting this at 1 instead of 0, b/c of nvidia driver bugs
-      for (uint32_t i = 0; i < 3; ++i) {
-        wg_size_vals[i]->addDecorate(spv::DecorationSpecId, i + 1);
-      }
+        // NOTE: 128 is the minimum value that has to be supported for x
+        uint32_t default_wg_size_vals[3]{128, 1, 1};
 
-      // preempt loads of the "<i32 x 3>*" work-group size constant
-      // -> this has to be a constant composite in SPIR-V, not a variable
-      // -> replace (map) all loads with the constant
-      std::vector<User *> users;
-      for (auto user : gv_wg_size->users()) {
-        users.emplace_back(user);
-      }
+        auto uint_type = BM->addIntegerType(32, false);
+        auto uint3_type = BM->addVectorType(uint_type, 3);
+        std::vector<SPIRVValue *> wg_size_vals{
+            BM->addSpecIntegerConstant(uint_type, default_wg_size_vals[0]),
+            BM->addSpecIntegerConstant(uint_type, default_wg_size_vals[1]),
+            BM->addSpecIntegerConstant(uint_type, default_wg_size_vals[2]),
+        };
+        auto wg_size = BM->addSpecCompositeConstant(uint3_type, wg_size_vals);
+        BM->setName(wg_size, global_name);
 
-      if (!users.empty()) {
-        // bitcast uint3 -> int3 for all users
-        // NOTE/TODO: ideally, this should stay a uint3, but this would incur
-        // type mismatch problems later on (would need to do int type inference
-        // over the whole function to fix this properly)
-        auto int_type = BM->addIntegerType(32, true);
-        auto int3_type = BM->addVectorType(int_type, 3);
-        auto entry_bb = (SPIRVBasicBlock *)transValue(&*F->begin(), nullptr);
-        auto wg_size_int3 =
-            BM->addUnaryInst(spv::OpBitcast, int3_type, wg_size, entry_bb);
+        // set work-group size (x, y, z) spec ids to 1, 2 and 3
+        // NOTE: we're starting this at 1 instead of 0, b/c of nvidia driver
+        // bugs
+        for (uint32_t i = 0; i < 3; ++i) {
+          wg_size_vals[i]->addDecorate(spv::DecorationSpecId, i + 1);
+        }
+        BF->addExecutionMode(new SPIRVExecutionModeId(
+            BF, spv::ExecutionModeLocalSizeId, wg_size_vals[0]->getId(),
+            wg_size_vals[1]->getId(), wg_size_vals[2]->getId()));
 
-        for (auto user : users) {
-          if (const auto instr = dyn_cast<LoadInst>(user)) {
-            mapValue((const Value *)instr, wg_size_int3);
+        // preempt loads of the "<i32 x 3>*" work-group size constant
+        // -> this has to be a constant composite in SPIR-V, not a variable
+        // -> replace (map) all loads with the constant
+        std::vector<User *> users;
+        for (auto user : gv_wg_size->users()) {
+          users.emplace_back(user);
+        }
+
+        if (!users.empty()) {
+          // bitcast uint3 -> int3 for all users
+          // NOTE/TODO: ideally, this should stay a uint3, but this would incur
+          // type mismatch problems later on (would need to do int type
+          // inference over the whole function to fix this properly)
+          auto int_type = BM->addIntegerType(32, true);
+          auto int3_type = BM->addVectorType(int_type, 3);
+          auto entry_bb = (SPIRVBasicBlock *)transValue(&*F->begin(), nullptr);
+          auto wg_size_int3 =
+              BM->addUnaryInst(spv::OpBitcast, int3_type, wg_size, entry_bb);
+
+          for (auto user : users) {
+            if (const auto instr = dyn_cast<LoadInst>(user)) {
+              mapValue((const Value *)instr, wg_size_int3);
+            }
           }
         }
       }
