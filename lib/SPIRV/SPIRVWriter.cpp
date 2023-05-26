@@ -1274,7 +1274,7 @@ SPIRV::SPIRVInstruction *LLVMToSPIRVBase::transUnaryInst(UnaryInstruction *U,
     BOC = OpCodeMap::map(OpCode);
   }
 
-  auto Op = transValue(U->getOperand(0), BB, true, FuncTransMode::Pointer);
+  auto val = transValue(U->getOperand(0), BB, true, FuncTransMode::Pointer);
 
   // take care of signed/unsigned type conversion mismatches,
   // as stated above this should be done properly at some point
@@ -1283,31 +1283,55 @@ SPIRV::SPIRVInstruction *LLVMToSPIRVBase::transUnaryInst(UnaryInstruction *U,
   const auto is_int = type->isTypeInt();
   const auto is_sint = (is_int ? ((SPIRVTypeInt *)type)->isSigned() : false);
   const auto is_uint = (is_int ? !((SPIRVTypeInt *)type)->isSigned() : false);
+  bool bitcast_output = false;
+  SPIRVType *conv_type = nullptr;
   switch (BOC) {
   case spv::OpUConvert:
     if (is_sint) {
-      BOC = OpSConvert;
+      bitcast_output = true;
+      conv_type = ((SPIRVTypeInt *)type)->getUnsigned();
     }
     break;
   case spv::OpSConvert:
     if (is_uint) {
-      BOC = OpUConvert;
+      bitcast_output = true;
+      conv_type = ((SPIRVTypeInt *)type)->getSigned();
     }
     break;
   case spv::OpConvertFToU:
     if (is_sint) {
-      BOC = OpConvertFToS;
+      bitcast_output = true;
+      conv_type = ((SPIRVTypeInt *)type)->getUnsigned();
     }
     break;
   case spv::OpConvertFToS:
     if (is_uint) {
-      BOC = OpConvertFToU;
+      bitcast_output = true;
+      conv_type = ((SPIRVTypeInt *)type)->getSigned();
+    }
+    break;
+  // also handle input value conversion
+  case spv::OpConvertUToF:
+    if (is_sint) {
+      val = BM->addUnaryInst(spv::OpBitcast,
+                             ((SPIRVTypeInt *)type)->getUnsigned(), val, BB);
+    }
+    break;
+  case spv::OpConvertSToF:
+    if (is_uint) {
+      val = BM->addUnaryInst(spv::OpBitcast,
+                             ((SPIRVTypeInt *)type)->getSigned(), val, BB);
     }
     break;
   default:
     break;
   }
-  return BM->addUnaryInst(transBoolOpCode(Op, BOC), type, Op, BB);
+  auto conv = BM->addUnaryInst(transBoolOpCode(val, BOC),
+                               conv_type ? conv_type : type, val, BB);
+  if (bitcast_output) {
+    return BM->addUnaryInst(spv::OpBitcast, type, conv, BB);
+  }
+  return conv;
 }
 
 /// This helper class encapsulates information extraction from
