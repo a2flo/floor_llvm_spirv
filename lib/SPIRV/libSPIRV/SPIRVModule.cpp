@@ -354,6 +354,8 @@ public:
                                         SPIRVBasicBlock *) override;
   SPIRVInstruction *addCmpInst(Op, SPIRVType *, SPIRVValue *, SPIRVValue *,
                                SPIRVBasicBlock *) override;
+  SPIRVInstruction *addPtrCmpInst(Op, SPIRVType *, SPIRVValue *, SPIRVValue *,
+                                  SPIRVBasicBlock *) override;
   SPIRVInstruction *addLoadInst(SPIRVValue *, const std::vector<SPIRVWord> &,
                                 SPIRVBasicBlock *) override;
   SPIRVInstruction *addPhiInst(SPIRVType *, std::vector<SPIRVValue *>,
@@ -1756,6 +1758,17 @@ SPIRVInstruction *SPIRVModuleImpl::addBranchConditionalInst(
 SPIRVInstruction *SPIRVModuleImpl::addCmpInst(Op TheOpCode, SPIRVType *TheType,
                                               SPIRVValue *Op1, SPIRVValue *Op2,
                                               SPIRVBasicBlock *BB) {
+  return addInstruction(SPIRVInstTemplateBase::create(
+                            TheOpCode, TheType, getId(),
+                            getVec(Op1->getId(), Op2->getId()), BB, this),
+                        BB);
+}
+
+SPIRVInstruction *SPIRVModuleImpl::addPtrCmpInst(Op TheOpCode,
+                                                 SPIRVType *TheType,
+                                                 SPIRVValue *Op1,
+                                                 SPIRVValue *Op2,
+                                                 SPIRVBasicBlock *BB) {
   return addInstruction(SPIRVInstTemplateBase::create(
                             TheOpCode, TheType, getId(),
                             getVec(Op1->getId(), Op2->getId()), BB, this),

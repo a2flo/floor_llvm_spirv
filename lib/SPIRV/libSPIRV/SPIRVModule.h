@@ -376,6 +376,8 @@ public:
                          const std::vector<SPIRVWord> &, SPIRVBasicBlock *) = 0;
   virtual SPIRVInstruction *addCmpInst(Op, SPIRVType *, SPIRVValue *,
                                        SPIRVValue *, SPIRVBasicBlock *) = 0;
+  virtual SPIRVInstruction *addPtrCmpInst(Op, SPIRVType *, SPIRVValue *,
+                                          SPIRVValue *, SPIRVBasicBlock *) = 0;
   virtual SPIRVInstruction *addControlBarrierInst(SPIRVValue *ExecKind,
                                                   SPIRVValue *MemKind,
                                                   SPIRVValue *MemSema,

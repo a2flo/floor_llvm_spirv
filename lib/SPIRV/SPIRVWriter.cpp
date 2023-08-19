@@ -1200,9 +1200,21 @@ SPIRVInstruction *LLVMToSPIRVBase::transCmpInst(CmpInst *Cmp,
   auto *Op0 = Cmp->getOperand(0);
   SPIRVValue *TOp0 = transValue(Op0, BB);
   SPIRVValue *TOp1 = transValue(Cmp->getOperand(1), BB);
-  // TODO: once the translator supports SPIR-V 1.4, update the condition below:
-  // if (/* */->isPointerTy() && /* it is not allowed to use SPIR-V 1.4 */)
   if (Op0->getType()->isPointerTy()) {
+    // TODO: once OpenCL supports SPIR-V 1.4, use this as well
+    if (SrcLang == spv::SourceLanguageGLSL) {
+      // -> can use PtrEqual/PtrNotEqual
+      const auto pred = Cmp->getPredicate();
+      assert(pred == CmpInst::ICMP_EQ || pred == CmpInst::ICMP_NE);
+      getErrorLog().checkError(
+          pred == CmpInst::ICMP_EQ || pred == CmpInst::ICMP_NE,
+          SPIRVEC_InvalidInstruction, Cmp,
+          "pointer compare predicate must be equal or not-equal\n");
+      const auto op =
+          (pred == CmpInst::ICMP_EQ ? spv::OpPtrEqual : spv::OpPtrNotEqual);
+      return BM->addPtrCmpInst(op, transType(Cmp->getType()), TOp0, TOp1, BB);
+    }
+
     unsigned AS = cast<PointerType>(Op0->getType())->getAddressSpace();
     SPIRVType *Ty = transType(getSizetType(AS));
     TOp0 = BM->addUnaryInst(OpConvertPtrToU, Ty, TOp0, BB);
@@ -2294,6 +2306,22 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
             }
           }
         }
+
+        // fun additional requirement: base ptr (gep_value) must have been
+        // decorated with ArrayStride -> this usually already has been done when
+        // directly using a function input, but will not be the case for GEP
+        // chains that couldn't be fused (e.g. when used via PHIs)
+        if (auto array_stride_iter = base_array_strides.find(gep_value_type);
+            array_stride_iter == base_array_strides.end()) {
+          // need to compute and add a stride for this base: base must point to
+          // a sized type -> will use that as the stride
+          auto pointee_type =
+              GEP->getPointerOperand()->getType()->getPointerElementType();
+          assert(pointee_type->isSized());
+          auto stride = M->getDataLayout().getTypeStoreSize(pointee_type);
+          add_array_stride_decoration(gep_value_type, stride);
+        }
+
         return mapValue(
             V, BM->addPtrAccessChainInst(gep_type, gep_value, Indices, BB,
                                          false /* never emit inbounds */));
@@ -4918,8 +4946,8 @@ void LLVMToSPIRVBase::decorateComposite(llvm::Type *llvm_type,
       decorateComposite(elem_type, spirv_elem_type);
     }
   } else if (auto array_type = dyn_cast<llvm::ArrayType>(llvm_type)) {
-    spirv_type->addDecorate(spv::DecorationArrayStride,
-                            DL.getTypeStoreSize(array_type->getElementType()));
+    add_array_stride_decoration(
+        spirv_type, DL.getTypeStoreSize(array_type->getElementType()));
     auto spirv_elem_type =
         (spirv_type->isTypeRuntimeArray()
              ? ((SPIRVTypeRuntimeArray *)spirv_type)->getElementType()
@@ -5003,8 +5031,7 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
           new SPIRVDecorate(DecorationBlock, enclosing_st_type));
       enclosing_st_type->addMemberDecorate(0, spv::DecorationOffset, 0);
       auto array_stride = M->getDataLayout().getTypeStoreSize(ssbo_elem_type);
-      enclosed_array_type->addDecorate(spv::DecorationArrayStride,
-                                       array_stride);
+      add_array_stride_decoration(enclosed_array_type, array_stride);
       decorateComposite(ssbo_elem_type, enclosed_type);
     } else if (!global_type.is_image) {
       auto spirv_elem_type = transType(elem_type);
@@ -5032,8 +5059,8 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
               new SPIRVDecorate(DecorationBlock, enclosing_type));
           enclosing_type->addMemberDecorate(0, spv::DecorationOffset, 0);
           auto array_stride = M->getDataLayout().getTypeStoreSize(elem_type);
-          rtarr_type->addDecorate(spv::DecorationArrayStride, array_stride);
-          mapped_type->addDecorate(spv::DecorationArrayStride, array_stride);
+          add_array_stride_decoration(rtarr_type, array_stride);
+          add_array_stride_decoration(mapped_type, array_stride);
         } else {
           // we need to use the storage buffer storage class
           assert(elem_type->isStructTy() && "SSBO must be a struct");
@@ -5042,9 +5069,8 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
           mapped_type = transType(ssbo_ptr_type);
           spirv_elem_type->addDecorate(
               new SPIRVDecorate(DecorationBlock, spirv_elem_type));
-          mapped_type->addDecorate(
-              spv::DecorationArrayStride,
-              M->getDataLayout().getTypeStoreSize(elem_type));
+          add_array_stride_decoration(
+              mapped_type, M->getDataLayout().getTypeStoreSize(elem_type));
         }
       } else {
         assert(elem_type->isStructTy() && "uniform type must be a struct");
@@ -7418,6 +7444,15 @@ bool LLVMToSPIRVBase::joinFPContract(Function *F, FPContract C) {
     return false;
   }
   llvm_unreachable("Unhandled FPContract value.");
+}
+
+void LLVMToSPIRVBase::add_array_stride_decoration(SPIRVType *type,
+                                                  const uint32_t stride) {
+  if (base_array_strides.contains(type)) {
+    return;
+  }
+  base_array_strides.emplace(type, stride);
+  type->addDecorate(spv::DecorationArrayStride, stride);
 }
 
 } // namespace SPIRV

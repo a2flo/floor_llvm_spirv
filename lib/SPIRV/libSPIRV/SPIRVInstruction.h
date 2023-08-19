@@ -950,15 +950,17 @@ protected:
       Op2Ty = getValueType(Op2);
       ResTy = Type;
     }
-    assert(isCmpOpCode(OpCode) && "Invalid op code for cmp inst");
     assert((ResTy->isTypeBool() || ResTy->isTypeInt()) &&
            "Invalid type for compare instruction");
-    // NOTE: the spec *does not* require the types to be equal, just that both
-    // types fulfill the requirements above + have the same bitness,
-    // signedness is not mentioned anywhere
-    //assert(Op1Ty == Op2Ty && "Inconsistent types");
-    assert(Op1Ty->getBitWidth() == Op2Ty->getBitWidth() &&
-           "Inconsistent bit width");
+    if (!Op1Ty->isTypePointer() /* not necessary/wanted for pointers */) {
+      assert(isCmpOpCode(OpCode) && "Invalid op code for cmp inst");
+      // NOTE: the spec *does not* require the types to be equal, just that both
+      // types fulfill the requirements above + have the same bitness,
+      // signedness is not mentioned anywhere
+      // assert(Op1Ty == Op2Ty && "Inconsistent types");
+      assert(Op1Ty->getBitWidth() == Op2Ty->getBitWidth() &&
+             "Inconsistent bit width");
+    }
   }
 };
 
@@ -992,6 +994,8 @@ _SPIRV_OP(FUnordGreaterThanEqual)
 _SPIRV_OP(LessOrGreater)
 _SPIRV_OP(Ordered)
 _SPIRV_OP(Unordered)
+_SPIRV_OP(PtrEqual)
+_SPIRV_OP(PtrNotEqual)
 #undef _SPIRV_OP
 
 class SPIRVUndefValueInternal : public SPIRVInstruction {
@@ -1975,7 +1979,8 @@ protected:
     }
 #else // -> use type directly instead
     assert(Type->isTypeArray() || Type->isTypeStruct() || Type->isTypeVector());
-    assert(!Type->isTypeVector() || (Type->isTypeVector() && getConstituents().size() > 1));
+    assert(!Type->isTypeVector() ||
+           (Type->isTypeVector() && getConstituents().size() > 1));
 #endif
   }
   std::vector<SPIRVId> Constituents;
@@ -2548,11 +2553,14 @@ _SPIRV_OP(GroupNonUniformBallotFindLSB, true, 5)
 _SPIRV_OP(GroupNonUniformBallotFindMSB, true, 5)
 #undef _SPIRV_OP
 
-template <Op OC_> class SPIRVGroupNonUniformArithmeticInst : public SPIRVInstruction {
+template <Op OC_>
+class SPIRVGroupNonUniformArithmeticInst : public SPIRVInstruction {
 public:
   const static Op OC = OC_;
   // Complete constructor
-  SPIRVGroupNonUniformArithmeticInst(SPIRVId TheId, SPIRVValue *scope_, spv::GroupOperation group_op_, SPIRVValue *val_, SPIRVBasicBlock *TheBB)
+  SPIRVGroupNonUniformArithmeticInst(SPIRVId TheId, SPIRVValue *scope_,
+                                     spv::GroupOperation group_op_,
+                                     SPIRVValue *val_, SPIRVBasicBlock *TheBB)
       : SPIRVInstruction(6, OC, val_->getType(), TheId, TheBB),
         val(val_->getId()), scope(scope_->getId()), group_op(group_op_) {
     validate();
@@ -2564,7 +2572,9 @@ public:
     }
   }
   // Incomplete constructor
-  SPIRVGroupNonUniformArithmeticInst() : SPIRVInstruction(OC), val(SPIRVID_INVALID), scope(SPIRVID_INVALID), group_op(spv::GroupOperationMax) {}
+  SPIRVGroupNonUniformArithmeticInst()
+      : SPIRVInstruction(OC), val(SPIRVID_INVALID), scope(SPIRVID_INVALID),
+        group_op(spv::GroupOperationMax) {}
 
   _SPIRV_DEF_ENCDEC5(Type, Id, scope, group_op, val)
 
@@ -2575,7 +2585,8 @@ protected:
   spv::GroupOperation group_op;
 };
 
-#define _SPIRV_OP(x, ...) typedef SPIRVGroupNonUniformArithmeticInst<Op##x> SPIRV##x;
+#define _SPIRV_OP(x, ...)                                                      \
+  typedef SPIRVGroupNonUniformArithmeticInst<Op##x> SPIRV##x;
 _SPIRV_OP(GroupNonUniformIAdd)
 _SPIRV_OP(GroupNonUniformFAdd)
 _SPIRV_OP(GroupNonUniformIMul)
@@ -2594,13 +2605,18 @@ _SPIRV_OP(GroupNonUniformLogicalOr)
 _SPIRV_OP(GroupNonUniformLogicalXor)
 #undef _SPIRV_OP
 
-template <Op OC_> class SPIRVGroupNonUniformShuffleInst : public SPIRVInstruction {
+template <Op OC_>
+class SPIRVGroupNonUniformShuffleInst : public SPIRVInstruction {
 public:
   const static Op OC = OC_;
   // Complete constructor
-  SPIRVGroupNonUniformShuffleInst(SPIRVId TheId, SPIRVValue *scope_, SPIRVValue *val_, SPIRVValue *lane_idx_delta_or_mask_, SPIRVBasicBlock *TheBB)
+  SPIRVGroupNonUniformShuffleInst(SPIRVId TheId, SPIRVValue *scope_,
+                                  SPIRVValue *val_,
+                                  SPIRVValue *lane_idx_delta_or_mask_,
+                                  SPIRVBasicBlock *TheBB)
       : SPIRVInstruction(6, OC, val_->getType(), TheId, TheBB),
-        val(val_->getId()), scope(scope_->getId()), lane_idx_delta_or_mask(lane_idx_delta_or_mask_->getId()) {
+        val(val_->getId()), scope(scope_->getId()),
+        lane_idx_delta_or_mask(lane_idx_delta_or_mask_->getId()) {
     validate();
     assert(TheBB && "Invalid BB");
     if (OC == OpGroupNonUniformShuffle || OC == OpGroupNonUniformShuffleXor) {
@@ -2610,7 +2626,9 @@ public:
     }
   }
   // Incomplete constructor
-  SPIRVGroupNonUniformShuffleInst() : SPIRVInstruction(OC), val(SPIRVID_INVALID), scope(SPIRVID_INVALID), lane_idx_delta_or_mask(SPIRVID_INVALID) {}
+  SPIRVGroupNonUniformShuffleInst()
+      : SPIRVInstruction(OC), val(SPIRVID_INVALID), scope(SPIRVID_INVALID),
+        lane_idx_delta_or_mask(SPIRVID_INVALID) {}
 
   _SPIRV_DEF_ENCDEC5(Type, Id, scope, val, lane_idx_delta_or_mask)
 
@@ -2621,7 +2639,8 @@ protected:
   SPIRVId lane_idx_delta_or_mask;
 };
 
-#define _SPIRV_OP(x, ...) typedef SPIRVGroupNonUniformShuffleInst<Op##x> SPIRV##x;
+#define _SPIRV_OP(x, ...)                                                      \
+  typedef SPIRVGroupNonUniformShuffleInst<Op##x> SPIRV##x;
 _SPIRV_OP(GroupNonUniformShuffle)
 _SPIRV_OP(GroupNonUniformShuffleXor)
 _SPIRV_OP(GroupNonUniformShuffleUp)
@@ -2757,10 +2776,12 @@ public:
   }
 
   llvm::Optional<ExtensionID> getRequiredExtension() const override {
-    if (auto parent_ext = SPIRVInstTemplateBase::getRequiredExtension(); parent_ext.hasValue()) {
+    if (auto parent_ext = SPIRVInstTemplateBase::getRequiredExtension();
+        parent_ext.hasValue()) {
       return parent_ext.getValue();
     }
-    if (hasType() && (getType()->isTypeFloat(32) || getType()->isTypeFloat(64))) {
+    if (hasType() &&
+        (getType()->isTypeFloat(32) || getType()->isTypeFloat(64))) {
       return ExtensionID::SPV_EXT_shader_atomic_float_add;
     }
     return {};
@@ -2874,7 +2895,9 @@ protected:
   static SPIRVCapVec image_query_caps;
 
 public:
-  SPIRVCapVec getRequiredCapability() const override { return image_query_caps; }
+  SPIRVCapVec getRequiredCapability() const override {
+    return image_query_caps;
+  }
   static void addCap(const Capability cap) {
     image_query_caps.emplace_back(cap);
     std::sort(image_query_caps.begin(), image_query_caps.end());

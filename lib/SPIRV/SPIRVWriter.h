@@ -254,23 +254,31 @@ private:
       SPIRVVariable **created_spirv_var = nullptr,
       spv::BuiltIn builtin = spv::BuiltIn::BuiltInPosition);
 
-  SPIRVVariable *
-  emitShaderSPIRVGlobal(const Function &F, SPIRVFunction *spirv_func, const GlobalVariable &GV,
-                        const std::string &var_name, uint32_t address_space,
-                        const spirv_global_io_type global_type,
-                        const std::string &md_info,
-                        spv::BuiltIn builtin = spv::BuiltIn::BuiltInPosition);
+  SPIRVVariable *emitShaderSPIRVGlobal(
+      const Function &F, SPIRVFunction *spirv_func, const GlobalVariable &GV,
+      const std::string &var_name, uint32_t address_space,
+      const spirv_global_io_type global_type, const std::string &md_info,
+      spv::BuiltIn builtin = spv::BuiltIn::BuiltInPosition);
 
   std::vector<SPIRVVariable *> immutable_samplers;
   std::pair<SPIRVInstruction *, Op>
   transVulkanImageFunction(CallInst *CI, SPIRVBasicBlock *BB,
                            const std::string &DemangledName);
 
-  SPIRVValue *add_libfloor_sub_group_op(StringRef MangledName, CallInst *CI, SPIRVBasicBlock *BB);
-  SPIRVValue *add_libfloor_sub_group_simd_shuffle(StringRef MangledName, CallInst *CI, SPIRVBasicBlock *BB);
+  SPIRVValue *add_libfloor_sub_group_op(StringRef MangledName, CallInst *CI,
+                                        SPIRVBasicBlock *BB);
+  SPIRVValue *add_libfloor_sub_group_simd_shuffle(StringRef MangledName,
+                                                  CallInst *CI,
+                                                  SPIRVBasicBlock *BB);
 
   // function image arg -> image type map
   std::unordered_map<const llvm::Value *, SPIRVType *> image_type_map;
+
+  // types of bases that may be used in OpPtrAccessChain that already have an
+  // ArrayStride decoration
+  std::unordered_map<SPIRVType *, uint32_t> base_array_strides;
+  // adds ArrayStride to type and registers it in "base_array_strides"
+  void add_array_stride_decoration(SPIRVType *type, const uint32_t stride);
 };
 
 class LLVMToSPIRVPass : public PassInfoMixin<LLVMToSPIRVPass>,
