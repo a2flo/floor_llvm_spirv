@@ -7448,7 +7448,7 @@ bool LLVMToSPIRVBase::joinFPContract(Function *F, FPContract C) {
 
 void LLVMToSPIRVBase::add_array_stride_decoration(SPIRVType *type,
                                                   const uint32_t stride) {
-  if (base_array_strides.contains(type)) {
+  if (base_array_strides.count(type) > 0) {
     return;
   }
   base_array_strides.emplace(type, stride);
