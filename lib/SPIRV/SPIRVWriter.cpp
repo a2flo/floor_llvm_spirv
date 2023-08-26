@@ -4249,7 +4249,11 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
       }
       auto gep = BM->addAccessChainInst(img_ptr_type, img_array, indices, BB,
                                         true, false);
-      return BM->addLoadInst(gep, {}, BB);
+      auto ld = BM->addLoadInst(gep, {}, BB);
+      // must decorate both the GEP and the load as NonUniform
+      gep->addDecorate(DecorationNonUniform);
+      ld->addDecorate(DecorationNonUniform);
+      return ld;
     } else if (MangledName.startswith("floor.ssbo_array_gep.")) {
       auto base = transValue(CI->getOperand(0), BB);
       std::vector<SPIRVValue *> indices;
@@ -4265,8 +4269,11 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
         ptr_type = llvm::PointerType::get(ptr_type->getPointerElementType(),
                                           SPIRAS_StorageBuffer);
       }
-      return BM->addAccessChainInst(transType(ptr_type), base, indices, BB,
-                                    true, false);
+      auto gep = BM->addAccessChainInst(transType(ptr_type), base, indices, BB,
+                                        true, false);
+      // must decorate the GEP as NonUniform (TODO: also decorate loads?)
+      gep->addDecorate(DecorationNonUniform);
+      return gep;
     } else if (MangledName == "floor.loop_merge") {
       auto merge_bb = transValue(CI->getArgOperand(0), nullptr);
       auto continue_bb = transValue(CI->getArgOperand(1), nullptr);
