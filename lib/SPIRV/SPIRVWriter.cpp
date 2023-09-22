@@ -1286,6 +1286,12 @@ SPIRV::SPIRVInstruction *LLVMToSPIRVBase::transUnaryInst(UnaryInstruction *U,
     BOC = OpCodeMap::map(OpCode);
   }
 
+  if (SrcLang != spv::SourceLanguageGLSL) {
+    auto Op = transValue(U->getOperand(0), BB, true, FuncTransMode::Pointer);
+    return BM->addUnaryInst(transBoolOpCode(Op, BOC), transType(U->getType()),
+                            Op, BB);
+  }
+
   auto val = transValue(U->getOperand(0), BB, true, FuncTransMode::Pointer);
 
   // take care of signed/unsigned type conversion mismatches,
