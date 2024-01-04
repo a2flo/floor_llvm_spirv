@@ -6,7 +6,7 @@
 // License. See LICENSE.TXT for details.
 //
 // Copyright (c) 2014 Advanced Micro Devices, Inc. All rights reserved.
-// Copyright (c) 2016 - 2023 Florian Ziesche Vulkan/SPIR-V support
+// Copyright (c) 2016 - 2024 Florian Ziesche Vulkan/SPIR-V support
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
 // copy of this software and associated documentation files (the "Software"),
