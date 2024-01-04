@@ -64,3 +64,8 @@ target_include_directories(LLVMSPIRVLib
     ${CMAKE_CURRENT_SOURCE_DIR}/libSPIRV
     ${CMAKE_CURRENT_SOURCE_DIR}/Mangler
 )
+
+# need to disable this here
+target_compile_options(LLVMSPIRVLib PRIVATE
+  -Wno-enum-constexpr-conversion
+)

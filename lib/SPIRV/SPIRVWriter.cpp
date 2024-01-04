@@ -5279,11 +5279,20 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
   return BVar;
 }
 
-GlobalVariable *LLVMToSPIRVBase::emitShaderGlobal(
+std::pair<GlobalVariable *, SPIRVVariable *> LLVMToSPIRVBase::emitShaderGlobal(
     const Function &F, SPIRVFunction *spirv_func, const std::string &var_name,
     llvm::Type *llvm_type, uint32_t address_space,
     const spirv_global_io_type global_type, const std::string &md_info,
-    SPIRVVariable **created_spirv_var, spv::BuiltIn builtin) {
+    spv::BuiltIn builtin) {
+  // check if already emitted
+  if (global_type.is_builtin) {
+    assert(builtin != spv::BuiltIn::BuiltInMax);
+    auto gv_iter = builtin_gv_cache.find(builtin);
+    if (gv_iter != builtin_gv_cache.end()) {
+      return gv_iter->second;
+    }
+  }
+
   std::string name_type = ".";
   if (global_type.is_builtin) {
     name_type = (global_type.is_input ? ".vulkan_builtin_input."
@@ -5303,11 +5312,13 @@ GlobalVariable *LLVMToSPIRVBase::emitShaderGlobal(
   auto spirv_var =
       emitShaderSPIRVGlobal(F, spirv_func, *GV, var_name, address_space,
                             global_type, md_info, builtin);
-  if (created_spirv_var != nullptr) {
-    *created_spirv_var = spirv_var;
+
+  // add to cache
+  if (global_type.is_builtin) {
+    builtin_gv_cache.emplace(builtin, std::pair{GV, spirv_var});
   }
 
-  return GV;
+  return {GV, spirv_var};
 }
 
 // helper function to figure out if a SSBO argument is only being written to
@@ -5764,9 +5775,10 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           } else {
             assert(md_prefix == "ssbo");
           }
-          auto GV =
+          GlobalVariable *GV = nullptr;
+          std::tie(GV, uniform_var) =
               emitShaderGlobal(*F, BF, arg_name.str(), elem_type, storage_class,
-                               global_type, md_info, &uniform_var);
+                               global_type, md_info);
           arg.replaceAllUsesWith(GV, true);
         } else if (ptr_as == SPIRAS_Uniform || ptr_as == SPIRAS_StorageBuffer) {
           // all image types are opaque/unsized
@@ -5777,9 +5789,10 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
             global_type.is_image = true;
             global_type.is_constant = true;
             global_type.is_uniform = true;
-            auto GV = emitShaderGlobal(*F, BF, arg_name.str(), elem_type,
-                                       SPIRAS_Uniform, global_type, md_info,
-                                       &uniform_var);
+            GlobalVariable *GV = nullptr;
+            std::tie(GV, uniform_var) =
+                emitShaderGlobal(*F, BF, arg_name.str(), elem_type,
+                                 SPIRAS_Uniform, global_type, md_info);
             arg.replaceAllUsesWith(GV);
           } else {
             // -> SSBO
@@ -5791,9 +5804,10 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
                 (!global_type.is_read_only ? is_write_only_arg(*F, arg)
                                            : false);
             const auto storage_class = SPIRAS_StorageBuffer;
-            auto GV = emitShaderGlobal(*F, BF, arg_name.str(), elem_type,
-                                       storage_class, global_type, md_info,
-                                       &uniform_var);
+            GlobalVariable *GV = nullptr;
+            std::tie(GV, uniform_var) =
+                emitShaderGlobal(*F, BF, arg_name.str(), elem_type,
+                                 storage_class, global_type, md_info);
             // any GEPs can be directly replaced with the new GV, all others can
             // no longer access it directly, but must go through a new "GEP #0"
             // access
@@ -5878,9 +5892,10 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           global_type.is_image = is_image;
           global_type.is_constant = true;
           global_type.is_uniform = true;
-          auto GV = emitShaderGlobal(*F, BF, arg_name.str(), array_type,
-                                     SPIRAS_Uniform, global_type, md_info,
-                                     &uniform_var);
+          GlobalVariable *GV = nullptr;
+          std::tie(GV, uniform_var) =
+              emitShaderGlobal(*F, BF, arg_name.str(), array_type,
+                               SPIRAS_Uniform, global_type, md_info);
           // replace with address space change (private to uniform)
           arg.replaceAllUsesWith(GV, true);
         } else if (arg_type->getPointerAddressSpace() == SPIRAS_Local) {
@@ -5916,9 +5931,9 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
             spirv_global_io_type global_type;
             global_type.is_input = true;
             global_type.is_builtin = true;
-            auto repl_var = emitShaderGlobal(*F, BF, arg_name.str(), elem_type,
-                                             SPIRAS_Input, global_type, md_info,
-                                             nullptr, builtin.first);
+            auto [repl_var, _] = emitShaderGlobal(
+                *F, BF, arg_name.str(), elem_type, SPIRAS_Input, global_type,
+                md_info, builtin.first);
             arg.replaceAllUsesWith(repl_var);
           } else {
             // TODO: should catch this earlier
@@ -5938,7 +5953,7 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
             global_type.set_location = true;
             global_type.location = input_location++;
 
-            auto repl_var =
+            auto [repl_var, _] =
                 emitShaderGlobal(*F, BF, arg_name.str(), arg_type, SPIRAS_Input,
                                  global_type, md_info);
             // only emit load if there actually is a user
@@ -5946,6 +5961,28 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
               LoadInst *load_repl_var = new LoadInst(
                   arg_type, repl_var, arg_name, false, &*(F->front().begin()));
               arg.replaceAllUsesWith(load_repl_var);
+            }
+          } else if (md_prefix == "stage" && md_info == "position") {
+            if (arg.getNumUses() != 0) {
+              if (!is_builtin_valid_in_stage(spv::BuiltInFragCoord, stage,
+                                             true /* input */)) {
+                errs() << "frag coord can not be used in stage \""
+                       << vulkan_stage_to_string(stage) << "\"\n";
+              } else {
+                // -> replace uses with builtin frag coord
+                llvm::Type *elem_type =
+                    FixedVectorType::get(Type::getFloatTy(M->getContext()), 4u);
+                spirv_global_io_type global_type;
+                global_type.is_input = true;
+                global_type.is_builtin = true;
+                auto [repl_var, _] = emitShaderGlobal(
+                    *F, BF, "vulkan.frag_coord", elem_type, SPIRAS_Input,
+                    global_type, "frag_coord", spv::BuiltInFragCoord);
+                LoadInst *load_repl_var =
+                    new LoadInst(arg_type, repl_var, "frag_coord", false,
+                                 &*(F->front().begin()));
+                arg.replaceAllUsesWith(load_repl_var);
+              }
             }
           } else {
             // builtin input -> must be ignored

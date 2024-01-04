@@ -247,18 +247,21 @@ private:
     uint32_t location{0};
   };
 
-  GlobalVariable *emitShaderGlobal(
+  //! cache for builtin variables (we only want to emit these once)
+  std::unordered_map<spv::BuiltIn, std::pair<GlobalVariable *, SPIRVVariable *>>
+      builtin_gv_cache;
+
+  std::pair<GlobalVariable *, SPIRVVariable *> emitShaderGlobal(
       const Function &F, SPIRVFunction *spirv_func, const std::string &var_name,
       llvm::Type *llvm_type, uint32_t address_space,
       const spirv_global_io_type global_type, const std::string &md_info,
-      SPIRVVariable **created_spirv_var = nullptr,
-      spv::BuiltIn builtin = spv::BuiltIn::BuiltInPosition);
+      spv::BuiltIn builtin = spv::BuiltIn::BuiltInMax);
 
   SPIRVVariable *emitShaderSPIRVGlobal(
       const Function &F, SPIRVFunction *spirv_func, const GlobalVariable &GV,
       const std::string &var_name, uint32_t address_space,
       const spirv_global_io_type global_type, const std::string &md_info,
-      spv::BuiltIn builtin = spv::BuiltIn::BuiltInPosition);
+      spv::BuiltIn builtin = spv::BuiltIn::BuiltInMax);
 
   std::vector<SPIRVVariable *> immutable_samplers;
   std::pair<SPIRVInstruction *, Op>
