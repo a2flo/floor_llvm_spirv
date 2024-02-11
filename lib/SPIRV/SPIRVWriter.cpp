@@ -6944,12 +6944,8 @@ LLVMToSPIRVBase::transVulkanImageFunction(CallInst *CI, SPIRVBasicBlock *BB,
     assert(is_offset_arg != nullptr && "is_offset flag must be a constant int");
     if (!is_offset_arg->isZero()) {
       auto offset_arg = args[arg_idx++];
-      if (isa<Constant>(offset_arg)) {
-        operands_mask |= spv::ImageOperandsConstOffsetMask;
-      } else {
-        operands_mask |= spv::ImageOperandsOffsetMask;
-        BM->addCapability(spv::CapabilityImageGatherExtended);
-      }
+      assert(isa<Constant>(offset_arg) && "offset must be constant");
+      operands_mask |= spv::ImageOperandsConstOffsetMask;
       image_operands.emplace_back(transValue(offset_arg, BB)->getId());
     }
 
