@@ -232,7 +232,8 @@ void SPIRVToOCLBase::visitCallSPRIVImageQuerySize(CallInst *CI) {
 
   if (ImgTyName.startswith("opencl.image1d")) {
     ImgDim = 1;
-  } else if (ImgTyName.startswith("opencl.image2d")) {
+  } else if (ImgTyName.startswith("opencl.image2d") ||
+             ImgTyName.startswith("opencl.imagecube")) {
     ImgDim = 2;
   } else if (ImgTyName.startswith("opencl.image3d")) {
     ImgDim = 3;

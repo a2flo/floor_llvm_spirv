@@ -4584,7 +4584,7 @@ void LLVMToSPIRVBase::transGlobalIOPipeStorage(GlobalVariable *V, MDNode *IO) {
 bool LLVMToSPIRVBase::transGlobalVariables() {
   // add global fixed/immutable samplers array that is always present
   if (SrcLang == spv::SourceLanguageGLSL) {
-    static constexpr const uint32_t fixed_sampler_count{32u};
+    static constexpr const uint32_t fixed_sampler_count{48u};
     if (bool has_vulkan_descriptor_buffer =
             M->getNamedMetadata("floor.vulkan_descriptor_buffer");
         has_vulkan_descriptor_buffer) {
@@ -4611,6 +4611,9 @@ bool LLVMToSPIRVBase::transGlobalVariables() {
           break;
         case sampler::ADDRESS_MODE::REPEAT:
           var_name += "_repeat";
+          break;
+        case sampler::ADDRESS_MODE::REPEAT_MIRRORED:
+          var_name += "_repeat_mirrored";
           break;
         default:
           break;
