@@ -4283,20 +4283,25 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
     } else if (MangledName == "floor.loop_merge") {
       auto merge_bb = transValue(CI->getArgOperand(0), nullptr);
       auto continue_bb = transValue(CI->getArgOperand(1), nullptr);
-      // NOTE: not allowing any control hints, b/c LLVM will have already
-      // optimized everything
+      auto loop_control = spv::LoopControlMaskNone;
+      if (auto loop_control_val =
+              dyn_cast_or_null<ConstantInt>(CI->getArgOperand(2));
+          loop_control_val) {
+        loop_control = (LoopControlMask)loop_control_val->getZExtValue();
+      }
       return BM->addLoopMergeInst(merge_bb->getId(), continue_bb->getId(),
-                                  spv::LoopControlMaskNone, {}, BB);
+                                  loop_control, {}, BB);
     } else if (MangledName == "floor.selection_merge") {
       auto merge_bb =
           (SPIRVBasicBlock *)transValue(CI->getArgOperand(0), nullptr);
-      // NOTE: not allowing any control hints, b/c LLVM will have already
-      // optimized everything - except for structured CFG insanity that we
-      // needed to create
-      // -> always mark as flatten and (hopefully) let vendor compilers deal
-      // with this
-      return BM->addSelectionMergeInst(merge_bb->getId(),
-                                       spv::SelectionControlFlattenMask, BB);
+      // default to always flatten
+      auto sel_control = spv::SelectionControlFlattenMask;
+      if (auto sel_control_val =
+              dyn_cast_or_null<ConstantInt>(CI->getArgOperand(1));
+          sel_control_val) {
+        sel_control = (SelectionControlMask)sel_control_val->getZExtValue();
+      }
+      return BM->addSelectionMergeInst(merge_bb->getId(), sel_control, BB);
     } else if (MangledName.startswith("floor.pack_") ||
                MangledName.startswith("floor.unpack_")) {
       static const std::unordered_map<std::string, GLSLExtOpKind> pack_lut{
