@@ -71,6 +71,7 @@
 #include "llvm/Support/Casting.h"
 #include "LLVMSPIRVLib.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/LibFloor/FloorUtils.h"
 #include <string>
 #include <unordered_set>
 using namespace llvm;
@@ -89,14 +90,13 @@ static bool is_used_in_function(const Function *F, const GlobalVariable *GV) {
     break;
   }
 
-  for (const auto &user : GV->users()) {
-    if (const auto instr = dyn_cast<Instruction>(user)) {
-      if (instr->getParent()->getParent() == F) {
-        return true;
-      }
+  bool is_used = false;
+  libfloor_utils::for_all_instruction_users(*GV, [&F, &is_used](const Instruction& instr) {
+    if (instr.getParent()->getParent() == F) {
+      is_used = true;
     }
-  }
-  return false;
+  });
+  return is_used;
 }
 
 static bool write_container(Module &M, raw_ostream &OS) {

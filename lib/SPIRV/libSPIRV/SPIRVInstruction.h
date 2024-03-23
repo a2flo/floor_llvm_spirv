@@ -394,25 +394,39 @@ public:
 class SPIRVMemoryAccess {
 public:
   SPIRVMemoryAccess(const std::vector<SPIRVWord> &TheMemoryAccess)
-      : TheMemoryAccessMask(0), Alignment(0), AliasScopeInstID(0),
+      : TheMemoryAccessMask(0), Alignment(0), Scope(0), AliasScopeInstID(0),
         NoAliasInstID(0) {
     memoryAccessUpdate(TheMemoryAccess);
   }
 
   SPIRVMemoryAccess()
-      : TheMemoryAccessMask(0), Alignment(0), AliasScopeInstID(0),
+      : TheMemoryAccessMask(0), Alignment(0), Scope(0), AliasScopeInstID(0),
         NoAliasInstID(0) {}
 
   void memoryAccessUpdate(const std::vector<SPIRVWord> &MemoryAccess) {
     if (!MemoryAccess.size())
       return;
     assert(MemoryAccess.size() > 0 && "Invalid memory access operand size");
-    assert(MemoryAccess.size() < 5 && "Invalid memory access operand size");
+    assert(MemoryAccess.size() < 6 && "Invalid memory access operand size");
     TheMemoryAccessMask = MemoryAccess[0];
     size_t MemAccessNumParam = 1;
     if (MemoryAccess[0] & MemoryAccessAlignedMask) {
       assert(MemoryAccess.size() > 1 && "Alignment operand is missing");
       Alignment = MemoryAccess[MemAccessNumParam++];
+    }
+    if (MemoryAccess[0] & MemoryAccessMakePointerAvailableMask &&
+        MemoryAccess[0] & MemoryAccessMakePointerVisibleMask) {
+      assert(false && "can't have both MakePointerAvailable and MakePointerVisible in the same memory access");
+    }
+    if (MemoryAccess[0] & MemoryAccessMakePointerAvailableMask) {
+      assert(MemoryAccess.size() > MemAccessNumParam &&
+          "MakePointerAvailable scope operand is missing");
+      Scope = MemoryAccess[MemAccessNumParam++];
+    }
+    if (MemoryAccess[0] & MemoryAccessMakePointerVisibleMask) {
+      assert(MemoryAccess.size() > MemAccessNumParam &&
+          "MakePointerVisible scope operand is missing");
+      Scope = MemoryAccess[MemAccessNumParam++];
     }
     if (MemoryAccess[0] & internal::MemoryAccessAliasScopeINTELMask) {
       assert(MemoryAccess.size() > MemAccessNumParam &&
@@ -439,12 +453,14 @@ public:
   }
   SPIRVWord getMemoryAccessMask() const { return TheMemoryAccessMask; }
   SPIRVWord getAlignment() const { return Alignment; }
+  SPIRVWord getScope() const { return Scope; }
   SPIRVWord getAliasScopeInstID() const { return AliasScopeInstID; }
   SPIRVWord getNoAliasInstID() const { return NoAliasInstID; }
 
 protected:
   SPIRVWord TheMemoryAccessMask;
   SPIRVWord Alignment;
+  SPIRVWord Scope;
   SPIRVId AliasScopeInstID;
   SPIRVId NoAliasInstID;
 };

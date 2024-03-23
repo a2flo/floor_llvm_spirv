@@ -83,6 +83,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/LibFloor/VulkanSampling.h"
+#include "llvm/Transforms/LibFloor/FloorUtils.h"
 #include "llvm/Transforms/Utils.h" // loop-simplify pass
 
 #include <cstdlib>
@@ -1904,6 +1905,17 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
     }
     if (ST->getMetadata(LLVMContext::MD_nontemporal))
       MemoryAccess[0] |= MemoryAccessNontemporalMask;
+    // always mark global/device pointer with "MakePointerAvailable"
+    if (auto addr_space = ST->getPointerAddressSpace();
+        SrcLang == spv::SourceLanguageGLSL &&
+        (addr_space == SPIRAS_StorageBuffer ||
+         addr_space == SPIRAS_PhysicalStorageBuffer)) {
+      MemoryAccess[0] |= MemoryAccessMakePointerAvailableMask |
+                         MemoryAccessNonPrivatePointerMask;
+      MemoryAccess.push_back(
+          BM->addIntegerConstant(BM->addIntegerType(32, true), ScopeDevice)
+              ->getId());
+    }
     if (MDNode *AliasingListMD = ST->getMetadata(LLVMContext::MD_alias_scope))
       transAliasingMemAccess(BM, AliasingListMD, MemoryAccess,
                              internal::MemoryAccessAliasScopeINTELMask);
@@ -1963,6 +1975,17 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
     }
     if (LD->getMetadata(LLVMContext::MD_nontemporal))
       MemoryAccess[0] |= MemoryAccessNontemporalMask;
+    // always mark global/device pointer with "MakePointerVisible"
+    if (auto addr_space = LD->getPointerAddressSpace();
+        SrcLang == spv::SourceLanguageGLSL &&
+        (addr_space == SPIRAS_StorageBuffer ||
+         addr_space == SPIRAS_PhysicalStorageBuffer)) {
+      MemoryAccess[0] |= MemoryAccessMakePointerVisibleMask |
+                         MemoryAccessNonPrivatePointerMask;
+      MemoryAccess.push_back(
+          BM->addIntegerConstant(BM->addIntegerType(32, true), ScopeDevice)
+              ->getId());
+    }
     if (MDNode *AliasingListMD = LD->getMetadata(LLVMContext::MD_alias_scope))
       transAliasingMemAccess(BM, AliasingListMD, MemoryAccess,
                              internal::MemoryAccessAliasScopeINTELMask);
@@ -6208,16 +6231,15 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
     if (SPIRSPIRVAddrSpaceMap::map(static_cast<SPIRAddressSpace>(gv_as)) ==
         spv::StorageClassFunction) {
       bool is_used_in_function = false;
-      for (const auto &user : GV.users()) {
-        if (const auto instr = dyn_cast<Instruction>(user)) {
-          if (instr->getParent()->getParent() == F) {
-            is_used_in_function = true;
-            break;
-          }
-        }
-      }
-      if (!is_used_in_function)
+      libfloor_utils::for_all_instruction_users(
+          GV, [&is_used_in_function, &F](Instruction &instr) {
+            if (instr.getParent()->getParent() == F) {
+              is_used_in_function = true;
+            }
+          });
+      if (!is_used_in_function) {
         continue;
+      }
 
       // duplicate the global + replace all uses of it in this function with the
       // duplicate
