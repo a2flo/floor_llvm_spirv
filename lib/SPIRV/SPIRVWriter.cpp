@@ -3692,6 +3692,20 @@ SPIRVValue *LLVMToSPIRVBase::transIntrinsicInst(IntrinsicInst *II,
       // -> assert we're actually copying data of the same type
       assert(dst->getType()->getPointerElementType() ==
              src->getType()->getPointerElementType());
+
+      // we can't copy more than one value in Vulkan/SPIR-V
+      auto cpy_len_op = II->getOperand(2);
+      if (const auto cpy_len = dyn_cast_or_null<ConstantInt>(cpy_len_op);
+          cpy_len) {
+        if (const auto len = cpy_len->getZExtValue(); len > 1) {
+          BM->getErrorLog().checkError(
+              false, SPIRVEC_InvalidInstruction, II,
+              "memcpy in Vulkan/SPIR-V can only copy one value (wanted " +
+                  std::to_string(len) + ")");
+          return nullptr;
+        }
+      }
+
       return BM->addCopyMemoryInst(transValue(dst, BB), transValue(src, BB),
                                    GetMemoryAccess(cast<MemIntrinsic>(II)), BB);
     } else {
