@@ -962,9 +962,10 @@ void OCLToSPIRVBase::transAtomicBuiltin(CallInst *CI,
                     default:
                       break;
                     }
-                    // SequentiallyConsistent memory order is not supported
+                    // if no order or SequentiallyConsistent is specified
+                    // (which is not supported by the Vulkan memory model)
                     // -> use AcquireRelease
-                    if (Ord == OCLMO_seq_cst) {
+                    if (Ord == OCLMO_seq_cst || Ord == 0) {
                       Ord = OCLMO_acq_rel;
                     }
                     // always mark volatile with Vulkan memory model

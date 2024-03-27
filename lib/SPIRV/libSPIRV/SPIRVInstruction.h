@@ -1012,6 +1012,7 @@ _SPIRV_OP(Ordered)
 _SPIRV_OP(Unordered)
 _SPIRV_OP(PtrEqual)
 _SPIRV_OP(PtrNotEqual)
+_SPIRV_OP(PtrDiff)
 #undef _SPIRV_OP
 
 class SPIRVUndefValueInternal : public SPIRVInstruction {

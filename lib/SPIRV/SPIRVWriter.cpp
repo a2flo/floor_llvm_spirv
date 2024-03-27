@@ -1204,16 +1204,26 @@ SPIRVInstruction *LLVMToSPIRVBase::transCmpInst(CmpInst *Cmp,
   if (Op0->getType()->isPointerTy()) {
     // TODO: once OpenCL supports SPIR-V 1.4, use this as well
     if (SrcLang == spv::SourceLanguageGLSL) {
-      // -> can use PtrEqual/PtrNotEqual
       const auto pred = Cmp->getPredicate();
-      assert(pred == CmpInst::ICMP_EQ || pred == CmpInst::ICMP_NE);
-      getErrorLog().checkError(
-          pred == CmpInst::ICMP_EQ || pred == CmpInst::ICMP_NE,
-          SPIRVEC_InvalidInstruction, Cmp,
-          "pointer compare predicate must be equal or not-equal\n");
-      const auto op =
-          (pred == CmpInst::ICMP_EQ ? spv::OpPtrEqual : spv::OpPtrNotEqual);
-      return BM->addPtrCmpInst(op, transType(Cmp->getType()), TOp0, TOp1, BB);
+      if (pred == CmpInst::ICMP_EQ || pred == CmpInst::ICMP_NE) {
+        // -> can use PtrEqual/PtrNotEqual
+        const auto op =
+            (pred == CmpInst::ICMP_EQ ? spv::OpPtrEqual : spv::OpPtrNotEqual);
+        return BM->addPtrCmpInst(op, transType(Cmp->getType()), TOp0, TOp1, BB);
+      }
+      // -> must use PtrDiff + additional test
+      assert(pred >= CmpInst::FIRST_ICMP_PREDICATE &&
+             pred <= CmpInst::LAST_ICMP_PREDICATE);
+      // diff -> gives us a signed difference
+      auto int_type = BM->addIntegerType(32, true);
+      auto diff_op =
+          BM->addPtrCmpInst(spv::OpPtrDiff, int_type, TOp0, TOp1, BB);
+      // since we changed to a signed value, we must always use a signed
+      // comparison
+      spv::Op cmp_op = CmpMap::map(Cmp->getSignedPredicate());
+      // compare with 0 constant
+      return BM->addCmpInst(cmp_op, transType(Cmp->getType()), diff_op,
+                            BM->addIntegerConstant(int_type, 0), BB);
     }
 
     unsigned AS = cast<PointerType>(Op0->getType())->getAddressSpace();
