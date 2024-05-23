@@ -932,7 +932,7 @@ void OCLToSPIRVBase::transAtomicBuiltin(CallInst *CI,
           if (SrcLang == spv::SourceLanguageGLSL) {
             Args[OrderIdx + I] = mapUInt(
                 M, cast<ConstantInt>(Args[OrderIdx + I]),
-                [&ptr_addr_space, this](unsigned Ord) {
+                [&ptr_addr_space, I, this](unsigned Ord) {
                   // add Vulkan/GLSL specific memory semantics
                   spv::MemorySemanticsMask memsem =
                       spv::MemorySemanticsMaskNone;
@@ -966,7 +966,16 @@ void OCLToSPIRVBase::transAtomicBuiltin(CallInst *CI,
                     // (which is not supported by the Vulkan memory model)
                     // -> use AcquireRelease
                     if (Ord == OCLMO_seq_cst || Ord == 0) {
-                      Ord = OCLMO_acq_rel;
+                      if (I == 0) {
+                        // -> all atomic ops except CAS #2 parameter
+                        Ord = OCLMO_acq_rel;
+                      } else {
+                        // -> CAS #2 parameter (Unequal)
+                        // "Unequal must not be set to Release or Acquire and
+                        // Release"
+                        // -> fall back to just acquire
+                        Ord = OCLMO_acquire;
+                      }
                     }
                     // always mark volatile with Vulkan memory model
                     memsem = memsem | spv::MemorySemanticsVolatileMask;
