@@ -2416,10 +2416,26 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
     std::vector<SPIRVWord> Comp;
     for (auto &I : SF->getShuffleMask())
       Comp.push_back(I);
-    return mapValue(V, BM->addVectorShuffleInst(
-                           transType(SF->getType()),
-                           transValue(SF->getOperand(0), BB),
-                           transValue(SF->getOperand(1), BB), Comp, BB));
+
+    auto op_0 = transValue(SF->getOperand(0), BB);
+    auto op_1 = transValue(SF->getOperand(1), BB);
+    assert(op_0->getType()->isTypeVector());
+    assert(op_1->getType()->isTypeVector());
+    const auto op_0_comp_type = op_0->getType()->getVectorComponentType();
+    const auto op_1_comp_type = op_1->getType()->getVectorComponentType();
+    if (op_0_comp_type != op_1_comp_type && op_0_comp_type->isTypeInt() &&
+        op_1_comp_type->isTypeInt()) {
+      // -> if op types don't match, always cast the second op to the type of
+      // the first, but both must be integer types and have a matching bitness
+      const auto op_0_int_type = (SPIRVTypeInt *)op_0_comp_type;
+      const auto op_1_int_type = (SPIRVTypeInt *)op_1_comp_type;
+      assert(op_0_int_type->getBitWidth() == op_1_int_type->getBitWidth());
+      assert(op_0_int_type->isSigned() != op_1_int_type->isSigned());
+      op_1 = BM->addUnaryInst(spv::OpBitcast, op_0->getType(), op_1, BB);
+    }
+
+    return mapValue(
+        V, BM->addVectorShuffleInst(op_0->getType(), op_0, op_1, Comp, BB));
   }
 
   if (AtomicRMWInst *ARMW = dyn_cast<AtomicRMWInst>(V)) {
