@@ -2423,6 +2423,8 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
     assert(op_1->getType()->isTypeVector());
     const auto op_0_comp_type = op_0->getType()->getVectorComponentType();
     const auto op_1_comp_type = op_1->getType()->getVectorComponentType();
+    auto result_type = transType(SF->getType());
+    assert(result_type->isTypeVector());
     if (op_0_comp_type != op_1_comp_type && op_0_comp_type->isTypeInt() &&
         op_1_comp_type->isTypeInt()) {
       // -> if op types don't match, always cast the second op to the type of
@@ -2432,10 +2434,16 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
       assert(op_0_int_type->getBitWidth() == op_1_int_type->getBitWidth());
       assert(op_0_int_type->isSigned() != op_1_int_type->isSigned());
       op_1 = BM->addUnaryInst(spv::OpBitcast, op_0->getType(), op_1, BB);
+
+      // we may also need to rewrite the result type
+      if (result_type->getVectorComponentType() != op_0_comp_type) {
+        result_type = BM->addVectorType(op_0_comp_type,
+                                        result_type->getVectorComponentCount());
+      }
     }
 
     return mapValue(
-        V, BM->addVectorShuffleInst(op_0->getType(), op_0, op_1, Comp, BB));
+        V, BM->addVectorShuffleInst(result_type, op_0, op_1, Comp, BB));
   }
 
   if (AtomicRMWInst *ARMW = dyn_cast<AtomicRMWInst>(V)) {
@@ -7092,8 +7100,36 @@ LLVMToSPIRVBase::transVulkanImageFunction(CallInst *CI, SPIRVBasicBlock *BB,
     write_operands.emplace_back(coords_arg->getId());
 
     // data
-    // TODO: proper uint/int data type?
     auto data_arg = transValue(args[2], BB);
+    if (data_arg->getType()->isTypeVectorOrScalarInt() &&
+        spirv_img_type->getSampledType()->isTypeInt()) {
+      // handle int <-> uint mismatch, image sample type decides signedness
+      const auto img_sampled_type =
+          (SPIRVTypeInt *)spirv_img_type->getSampledType();
+      const auto img_is_signed = img_sampled_type->isSigned();
+      if (data_arg->getType()->isTypeVector()) {
+        auto data_vec_type = (SPIRVTypeVector *)data_arg->getType();
+        assert(data_vec_type->getComponentType()->isTypeInt());
+        auto data_comp_type = (SPIRVTypeInt *)data_vec_type->getComponentType();
+        if (data_comp_type->isSigned() != img_is_signed) {
+          data_arg = BM->addUnaryInst(
+              spv::OpBitcast,
+              BM->addVectorType(img_is_signed ? data_comp_type->getSigned()
+                                              : data_comp_type->getUnsigned(),
+                                data_vec_type->getComponentCount()),
+              data_arg, BB);
+        }
+      } else { // -> scalar
+        auto data_scalar_type = (SPIRVTypeInt *)data_arg->getType();
+        if (data_scalar_type->isSigned() != img_is_signed) {
+          data_arg =
+              BM->addUnaryInst(spv::OpBitcast,
+                               img_is_signed ? data_scalar_type->getSigned()
+                                             : data_scalar_type->getUnsigned(),
+                               data_arg, BB);
+        }
+      }
+    }
     write_operands.emplace_back(data_arg->getId());
 
     // lod type and args
