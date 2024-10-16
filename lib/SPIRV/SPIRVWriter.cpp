@@ -7485,6 +7485,20 @@ LLVMToSPIRVBase::transBuiltinToInstWithoutDecoration(Op OC, CallInst *CI,
                             BB);
   }
   default: {
+    // -> check for LOD operand in OpImageWrite, add source extensions if so
+    if (OC == OpImageWrite && CI->arg_size() >= 5) {
+      for (uint32_t arg_idx = 3, arg_count = CI->arg_size();
+           arg_idx < arg_count; arg_idx += 2) {
+        ConstantInt *img_op =
+            dyn_cast_or_null<ConstantInt>(CI->getArgOperand(arg_idx));
+        if (img_op && img_op->getZExtValue() == 2) {
+          BM->getSourceExtension().insert("cl_khr_mipmap_image");
+          BM->getSourceExtension().insert("cl_khr_mipmap_image_writes");
+          break;
+        }
+      }
+    }
+
     if (isCvtOpCode(OC) && OC != OpGenericCastToPtrExplicit) {
       return BM->addUnaryInst(OC, transType(CI->getType()),
                               transValue(CI->getArgOperand(0), BB), BB);
