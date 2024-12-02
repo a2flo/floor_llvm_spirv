@@ -6391,6 +6391,7 @@ bool LLVMToSPIRVBase::transVulkanVersion() {
   case 1:
     switch (version_minor) {
     case 3:
+    case 4:
       BM->setSPIRVVersion(static_cast<uint32_t>(VersionNumber::SPIRV_1_6));
       break;
     default:
