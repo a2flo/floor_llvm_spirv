@@ -360,6 +360,9 @@ enum Kind {
   _SPIRV_OP(vk_capability_float16)
   _SPIRV_OP(vk_capability_float64)
   _SPIRV_OP(vk_capability_multiview)
+  _SPIRV_OP(vk_capability_workgroup_memory_explicit_layout)
+  _SPIRV_OP(vk_capability_workgroup_memory_explicit_layout_8bit_access)
+  _SPIRV_OP(vk_capability_workgroup_memory_explicit_layout_16bit_access)
 #undef _SPIRV_OP
 };
 // clang-format on

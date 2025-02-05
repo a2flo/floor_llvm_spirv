@@ -1757,6 +1757,12 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
              "invalid GV/BB");
     }
 
+    if (SrcLang == spv::SourceLanguageGLSL &&
+        StorageClass == spv::StorageClassWorkgroup) {
+      // do not init workgroup variables
+      Init = nullptr;
+    }
+
     // for Vulkan, we will remove invalid initializers (zero or undef needs to
     // be present in LLVM,  but not in SPIR-V)
     SPIRVValue *BVarInit = nullptr;
@@ -4762,11 +4768,16 @@ bool LLVMToSPIRVBase::transGlobalVariables() {
     if ((*I).hasName() && (*I).getName().find(".vulkan") != std::string::npos)
       continue;
 
-    // ignore any globals that need to be put into functions (map to function
-    // storage class), these are handled later
-    if (SPIRSPIRVAddrSpaceMap::map(static_cast<SPIRAddressSpace>(
-            (*I).getType()->getAddressSpace())) == spv::StorageClassFunction)
-      continue;
+    if (SrcLang == spv::SourceLanguageGLSL) {
+      // ignore any globals that need to be put into functions (map to function
+      // or workgroup storage class), these are handled later
+      const auto global_addr_space = SPIRSPIRVAddrSpaceMap::map(
+          static_cast<SPIRAddressSpace>((*I).getType()->getAddressSpace()));
+      if (global_addr_space == spv::StorageClassFunction ||
+          global_addr_space == spv::StorageClassWorkgroup) {
+        continue;
+      }
+    }
 
     // ignore external globals
     if ((*I).getLinkage() == GlobalValue::ExternalLinkage ||
@@ -6228,12 +6239,7 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
         // preempt loads of the "<i32 x 3>*" work-group size constant
         // -> this has to be a constant composite in SPIR-V, not a variable
         // -> replace (map) all loads with the constant
-        std::vector<User *> users;
-        for (auto user : gv_wg_size->users()) {
-          users.emplace_back(user);
-        }
-
-        if (!users.empty()) {
+        if (!gv_wg_size->hasZeroLiveUses()) {
           // bitcast uint3 -> int3 for all users
           // NOTE/TODO: ideally, this should stay a uint3, but this would incur
           // type mismatch problems later on (would need to do int type
@@ -6244,11 +6250,15 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           auto wg_size_int3 =
               BM->addUnaryInst(spv::OpBitcast, int3_type, wg_size, entry_bb);
 
-          for (auto user : users) {
-            if (const auto instr = dyn_cast<LoadInst>(user)) {
-              mapValue((const Value *)instr, wg_size_int3);
-            }
-          }
+          libfloor_utils::for_all_instruction_users(
+              *gv_wg_size, [this, &wg_size_int3](Instruction &instr) {
+                if (const auto ld_instr = dyn_cast<LoadInst>(&instr)) {
+                  mapValue((const Value *)ld_instr, wg_size_int3);
+                } else {
+                  assert(false &&
+                         "unhandled local/work-group size instruction user");
+                }
+              });
         }
       }
     }
@@ -6266,6 +6276,10 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
   // OpVariables), but before being used when adding the instructions
   std::unordered_set<GlobalVariable *> added_globals;
   for (auto &GV : M->globals()) {
+    // don't do this for special variables
+    if (GV.getName().find(".vulkan") != std::string::npos)
+      continue;
+
     // don't want to handle the globals that we added in here
     if (added_globals.count(&GV) > 0)
       continue;
@@ -6280,11 +6294,12 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
         spv::StorageClassFunction) {
       bool is_used_in_function = false;
       libfloor_utils::for_all_instruction_users(
-          GV, [&is_used_in_function, &F](Instruction &instr) {
-            if (instr.getParent()->getParent() == F) {
-              is_used_in_function = true;
-            }
-          });
+          GV,
+          [&is_used_in_function](Instruction &instr) {
+            // always true with restriction below
+            is_used_in_function = true;
+          },
+          F /* restrict to this function */);
       if (!is_used_in_function) {
         continue;
       }
@@ -6320,8 +6335,28 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
       transValue(dup, BB);
     } else if (SPIRSPIRVAddrSpaceMap::map(static_cast<SPIRAddressSpace>(
                    gv_as)) == spv::StorageClassWorkgroup) {
-      BM->addEntryPointIO(BF->getId(),
-                          (SPIRVVariable *)transValue(&GV, nullptr));
+      auto wg_variable = (SPIRVVariable *)transValue(&GV, nullptr);
+      BM->addEntryPointIO(BF->getId(), wg_variable);
+
+      if (SrcLang == SourceLanguageGLSL) {
+        // ensure that workgroup memory may always alias
+        wg_variable->addDecorate(spv::DecorationAliased);
+
+        // ensure the extension + all explicit layout capabilities are set
+        BM->addExtension(ExtensionID::SPV_KHR_workgroup_memory_explicit_layout);
+        BM->addCapability(CapabilityWorkgroupMemoryExplicitLayoutKHR);
+        BM->addCapability(CapabilityWorkgroupMemoryExplicitLayout8BitAccessKHR);
+        BM->addCapability(
+            CapabilityWorkgroupMemoryExplicitLayout16BitAccessKHR);
+
+        // add block, stride and all member decorations
+        auto wg_type = wg_variable->getType()->getPointerElementType();
+        assert(wg_type->isTypeStruct());
+        auto llvm_wg_type = GV.getType()->getPointerElementType();
+        assert(llvm_wg_type->isStructTy());
+        wg_type->addDecorate(spv::DecorationBlock);
+        decorateComposite(llvm_wg_type, wg_type);
+      }
     }
   }
 

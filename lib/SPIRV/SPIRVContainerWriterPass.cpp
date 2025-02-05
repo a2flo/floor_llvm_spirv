@@ -90,12 +90,19 @@ static bool is_used_in_function(const Function *F, const GlobalVariable *GV) {
     break;
   }
 
+  // always keep work-group memory aliases for a given function
+  if (GV->getName().startswith("wg.alias." + F->getName().str() + ".")) {
+    return true;
+  }
+
   bool is_used = false;
-  libfloor_utils::for_all_instruction_users(*GV, [&F, &is_used](const Instruction& instr) {
-    if (instr.getParent()->getParent() == F) {
-      is_used = true;
-    }
-  });
+  libfloor_utils::for_all_instruction_users(
+      *GV,
+      [&is_used](const Instruction &) {
+        // always true with restriction below
+        is_used = true;
+      },
+      F /* restrict to this function */);
   return is_used;
 }
 
@@ -188,6 +195,7 @@ static bool write_container(Module &M, raw_ostream &OS) {
     SPIRV::TranslatorOpts::ExtensionsStatusMap exts;
     exts[SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add] = true;
     exts[SPIRV::ExtensionID::SPV_KHR_fragment_shader_barycentric] = true;
+    exts[SPIRV::ExtensionID::SPV_KHR_workgroup_memory_explicit_layout] = true;
     //exts[SPIRV::ExtensionID::SPV_KHR_no_integer_wrap_decoration] = true;
     //exts[SPIRV::ExtensionID::SPV_KHR_float_controls] = true;
     SPIRV::TranslatorOpts opts(SPIRV::VersionNumber::MaximumVersion, exts);

@@ -200,6 +200,9 @@ template <> void SPIRVMap<OclExt::Kind, std::string>::init() {
   _SPIRV_OP(vk_capability_float16)
   _SPIRV_OP(vk_capability_float64)
   _SPIRV_OP(vk_capability_multiview)
+  _SPIRV_OP(vk_capability_workgroup_memory_explicit_layout)
+  _SPIRV_OP(vk_capability_workgroup_memory_explicit_layout_8bit_access)
+  _SPIRV_OP(vk_capability_workgroup_memory_explicit_layout_16bit_access)
 #undef _SPIRV_OP
 }
 
@@ -218,6 +221,9 @@ template <> void SPIRVMap<OclExt::Kind, SPIRVCapabilityKind>::init() {
   add(OclExt::vk_capability_float16, CapabilityFloat16);
   add(OclExt::vk_capability_float64, CapabilityFloat64);
   add(OclExt::vk_capability_multiview, CapabilityMultiView);
+  add(OclExt::vk_capability_workgroup_memory_explicit_layout, CapabilityWorkgroupMemoryExplicitLayoutKHR);
+  add(OclExt::vk_capability_workgroup_memory_explicit_layout_8bit_access, CapabilityWorkgroupMemoryExplicitLayout8BitAccessKHR);
+  add(OclExt::vk_capability_workgroup_memory_explicit_layout_16bit_access, CapabilityWorkgroupMemoryExplicitLayout16BitAccessKHR);
 }
 
 /// Map OpenCL work functions to SPIR-V builtin variables.
