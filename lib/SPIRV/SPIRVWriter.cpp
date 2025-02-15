@@ -4768,15 +4768,13 @@ bool LLVMToSPIRVBase::transGlobalVariables() {
     if ((*I).hasName() && (*I).getName().find(".vulkan") != std::string::npos)
       continue;
 
-    if (SrcLang == spv::SourceLanguageGLSL) {
-      // ignore any globals that need to be put into functions (map to function
-      // or workgroup storage class), these are handled later
-      const auto global_addr_space = SPIRSPIRVAddrSpaceMap::map(
-          static_cast<SPIRAddressSpace>((*I).getType()->getAddressSpace()));
-      if (global_addr_space == spv::StorageClassFunction ||
-          global_addr_space == spv::StorageClassWorkgroup) {
-        continue;
-      }
+    // ignore any globals that need to be put into functions (map to function
+    // or workgroup storage class), these are handled later
+    const auto global_addr_space = SPIRSPIRVAddrSpaceMap::map(
+        static_cast<SPIRAddressSpace>((*I).getType()->getAddressSpace()));
+    if (global_addr_space == spv::StorageClassFunction ||
+        global_addr_space == spv::StorageClassWorkgroup) {
+      continue;
     }
 
     // ignore external globals
@@ -5846,7 +5844,8 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
         // -> globals
         SPIRVVariable *uniform_var = nullptr;
         const auto ptr_as = arg_type->getPointerAddressSpace();
-        if (arg.onlyReadsMemory() &&
+        if ((md_prefix == "iub" || md_prefix == "ssbo") &&
+            arg.onlyReadsMemory() &&
             (arg.hasAttribute(Attribute::Dereferenceable) ||
              arg.hasAttribute(Attribute::DereferenceableOrNull))) {
           // -> uniform, use static/fixed SSBO
@@ -5862,8 +5861,6 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           if (md_prefix == "iub") {
             global_type.is_iub = true;
             storage_class = SPIRAS_Uniform;
-          } else {
-            assert(md_prefix == "ssbo");
           }
           GlobalVariable *GV = nullptr;
           std::tie(GV, uniform_var) =
@@ -5886,6 +5883,7 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
             arg.replaceAllUsesWith(GV);
           } else {
             // -> SSBO
+            assert(md_prefix != "iub");
             spirv_global_io_type global_type;
             global_type.is_uniform = true;
             global_type.is_ssbo_array = (md_prefix == "ssbo_array");
