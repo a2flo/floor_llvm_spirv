@@ -4476,6 +4476,21 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
                                        spv::MemorySemanticsImageMemoryMask,
                                    true);
       return BM->addControlBarrierInst(wg_scope, wg_scope, wg_sema, BB);
+    } else if (MangledName == "floor.exit") {
+      // NOTE: we assume everything has been inlined at this point, so that we
+      // can just return/exit
+
+      // similar to what we already do for fragment discard, we need to ignore
+      // the next unreachable here
+      ignore_next_unreachable = true;
+      if (CI->getParent()->getParent()->getCallingConv() ==
+          llvm::CallingConv::FLOOR_FRAGMENT) {
+        // fragment shader can just exit directly
+        return BM->addKillInst(BB);
+      } else {
+        // kernel or vertex shader can only use a return op
+        return BM->addReturnInst(BB);
+      }
     }
     errs() << "unhandled floor func: " << MangledName << "\n";
   }
