@@ -269,6 +269,7 @@ const static char Min[] = "min";
 const static char Mix[] = "mix";
 const static char NDRangePrefix[] = "ndrange_";
 const static char Pipe[] = "pipe";
+const static char QueryImageLOD[] = "query_image_lod";
 const static char ReadImage[] = "read_image";
 const static char ReadPipe[] = "read_pipe";
 const static char ReadPipeBlockingINTEL[] = "read_pipe_bl";

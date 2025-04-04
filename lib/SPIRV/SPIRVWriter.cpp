@@ -6588,10 +6588,11 @@ SPIRVInstruction *LLVMToSPIRVBase::transBuiltinToInst(StringRef DemangledName,
   Op OC = OpNop;
   SPIRVInstruction *Inst = nullptr;
 
-  // special handling for Vulkan/SPIR-V image read/write
+  // special handling for Vulkan/SPIR-V image functions
   if (SrcLang == spv::SourceLanguageGLSL &&
       (DemangledName.find(kOCLBuiltinName::ReadImage) == 0 ||
        DemangledName.find(kOCLBuiltinName::WriteImage) == 0 ||
+       DemangledName.find(kOCLBuiltinName::QueryImageLOD) == 0 ||
        DemangledName.find(std::string(kSPIRVName::Prefix) +
                           kSPIRVName::ImageQuerySize) ==
            0 /* matches both LOD and non-LOD */)) {
@@ -7238,6 +7239,40 @@ LLVMToSPIRVBase::transVulkanImageFunction(CallInst *CI, SPIRVBasicBlock *BB,
     }
 
     return {write_sample, write_sample->getOpCode()};
+  } else if (DemangledName.find("query_image_lod") == 0) {
+    assert(args.size() == 3 && "invalid argument count");
+    assert(CI->getParent()->getParent()->getCallingConv() ==
+               CallingConv::FLOOR_FRAGMENT &&
+           "must only be called in a fragment shader");
+    assert(M->getNamedMetadata("floor.vulkan_descriptor_buffer") != nullptr &&
+           "must have descripter buffer support");
+
+    // retrieve the sampler idx, load the sampler and create the sampled image
+    auto sampler_idx_arg = dyn_cast<ConstantInt>(args[1]);
+    assert(sampler_idx_arg != nullptr && "sampler must be a constant int");
+    const vulkan_sampling::sampler sampler_val{
+        (uint32_t)sampler_idx_arg->getZExtValue()};
+
+    auto loaded_sampler =
+        BM->addLoadInst(immutable_samplers[sampler_val.value], {}, BB);
+    std::vector<SPIRVWord> sampled_img_ops{
+        loaded_img->getId(),
+        loaded_sampler->getId(),
+    };
+    auto img = BM->addInstTemplate(OpSampledImage, sampled_img_ops, BB,
+                                   BM->addSampledImageType(spirv_img_type));
+
+    // operands
+    auto coords_arg = transValue(args[2], BB);
+    std::vector<SPIRVWord> query_operands{img->getId(), coords_arg->getId()};
+
+    // return type is always float2
+    auto ret_type = BM->addVectorType(BM->addFloatType(32), 2);
+
+    // create op
+    auto query_lod =
+        BM->addInstTemplate(spv::OpImageQueryLod, query_operands, BB, ret_type);
+    return {query_lod, query_lod->getOpCode()};
   } else if (DemangledName.find(kSPIRVName::ImageQuerySize) !=
              std::string::npos) {
     std::vector<SPIRVWord> query_operands{loaded_img->getId()};
