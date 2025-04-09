@@ -2440,12 +2440,12 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
       assert(op_0_int_type->getBitWidth() == op_1_int_type->getBitWidth());
       assert(op_0_int_type->isSigned() != op_1_int_type->isSigned());
       op_1 = BM->addUnaryInst(spv::OpBitcast, op_0->getType(), op_1, BB);
+    }
 
-      // we may also need to rewrite the result type
-      if (result_type->getVectorComponentType() != op_0_comp_type) {
-        result_type = BM->addVectorType(op_0_comp_type,
-                                        result_type->getVectorComponentCount());
-      }
+    // we may also need to rewrite the result type
+    if (result_type->getVectorComponentType() != op_0_comp_type) {
+      result_type = BM->addVectorType(op_0_comp_type,
+                                      result_type->getVectorComponentCount());
     }
 
     return mapValue(
