@@ -5867,8 +5867,7 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
         const auto ptr_as = arg_type->getPointerAddressSpace();
         if ((md_prefix == "iub" || md_prefix == "ssbo") &&
             arg.onlyReadsMemory() &&
-            (arg.hasAttribute(Attribute::Dereferenceable) ||
-             arg.hasAttribute(Attribute::DereferenceableOrNull))) {
+            arg.hasAttribute(Attribute::Dereferenceable)) {
           // -> uniform, use static/fixed SSBO
           // NOTE: this could be made a Block variable, but that would have
           // insane alignment/offset requirements, so always make it a SSBO,
