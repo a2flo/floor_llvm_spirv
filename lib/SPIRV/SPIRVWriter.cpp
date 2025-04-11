@@ -5518,7 +5518,9 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
     }
 
     // always add this
-    if (stage == VULKAN_STAGE::FRAGMENT) {
+    if (stage == VULKAN_STAGE::VERTEX) {
+      BM->addCapability(CapabilityDrawParameters);
+    } else if (stage == VULKAN_STAGE::FRAGMENT) {
       BF->addExecutionMode(
           new SPIRVExecutionMode(BF, ExecutionModeOriginUpperLeft));
     }
@@ -5597,15 +5599,13 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           //{ "enqueued_workgroup_size", spv::BuiltInEnqueuedWorkgroupSize },
           //{ "global_offset", spv::BuiltInGlobalOffset },
           //{ "global_linear_id", spv::BuiltInGlobalLinearId },
-          //{ "subgroup_size", spv::BuiltInSubgroupSize },
           //{ "subgroup_max_size", spv::BuiltInSubgroupMaxSize },
-          //{ "num_subgroups", spv::BuiltInNumSubgroups },
           //{ "num_enqueued_subgroups", spv::BuiltInNumEnqueuedSubgroups },
-          //{ "subgroup_id", spv::BuiltInSubgroupId },
-          //{ "subgroup_local_invocation_id",
           // spv::BuiltInSubgroupLocalInvocationId },
           {"vertex_index", spv::BuiltInVertexIndex},
+          {"base_vertex_index", spv::BuiltInBaseVertex},
           {"instance_index", spv::BuiltInInstanceIndex},
+          {"base_instance_index", spv::BuiltInBaseInstance},
           {"view_index", spv::BuiltInViewIndex},
           {"barycentric_coord", spv::BuiltInBaryCoordKHR},
           {"sub_group_id", spv::BuiltInSubgroupId},
@@ -5678,7 +5678,11 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
               //{ spv::BuiltInSubgroupMaxSize, VULKAN_STAGE::NONE },
               //{ spv::BuiltInNumEnqueuedSubgroups, VULKAN_STAGE::NONE },
               {spv::BuiltInVertexIndex, VULKAN_STAGE::VERTEX},
-              {spv::BuiltInInstanceIndex, VULKAN_STAGE::VERTEX},
+              {spv::BuiltInBaseVertex, VULKAN_STAGE::VERTEX},
+              {spv::BuiltInInstanceIndex,
+               VULKAN_STAGE::VERTEX | VULKAN_STAGE::TESSELLATION_EVALUATION},
+              {spv::BuiltInBaseInstance,
+               VULKAN_STAGE::VERTEX | VULKAN_STAGE::TESSELLATION_EVALUATION},
               {spv::BuiltInViewIndex,
                (VULKAN_STAGE::VERTEX | VULKAN_STAGE::TESSELLATION_CONTROL |
                 VULKAN_STAGE::TESSELLATION_EVALUATION | VULKAN_STAGE::GEOMETRY |
@@ -5742,7 +5746,9 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
               //{ spv::BuiltInSubgroupMaxSize, VULKAN_STAGE::NONE },
               //{ spv::BuiltInNumEnqueuedSubgroups, VULKAN_STAGE::NONE },
               {spv::BuiltInVertexIndex, VULKAN_STAGE::NONE},
+              {spv::BuiltInBaseVertex, VULKAN_STAGE::NONE},
               {spv::BuiltInInstanceIndex, VULKAN_STAGE::NONE},
+              {spv::BuiltInBaseInstance, VULKAN_STAGE::NONE},
               {spv::BuiltInViewIndex, VULKAN_STAGE::NONE},
           };
 
