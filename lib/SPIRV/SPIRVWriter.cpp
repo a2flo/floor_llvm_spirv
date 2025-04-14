@@ -6280,6 +6280,14 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
         }
       }
     }
+
+    if (F->getCallingConv() == llvm::CallingConv::FLOOR_FRAGMENT) {
+      // add early_fragment_tests? (no valid arguments)
+      if (F->getMetadata("early_fragment_tests")) {
+        BF->addExecutionMode(
+            new SPIRVExecutionMode(BF, spv::ExecutionModeEarlyFragmentTests));
+      }
+    }
   } else if (SrcLang != SourceLanguageGLSL) {
     // Creating all basic blocks before creating any instruction.
     for (auto &FI : *F) {
