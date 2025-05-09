@@ -4017,12 +4017,15 @@ SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_simd_shuffle(
   auto spv_lane_value = transValue(lane_value, BB);
   auto shuffle_op_type = spv_lane_value->getType();
 
-  if (MangledName.endswith("s32") || MangledName.endswith("u32")) {
+  if (MangledName.endswith("s8") || MangledName.endswith("s16") ||
+      MangledName.endswith("s32") || MangledName.endswith("s64") ||
+      MangledName.endswith("u8") || MangledName.endswith("u16") ||
+      MangledName.endswith("u32") || MangledName.endswith("u64")) {
     if (!shuffle_op_type->isTypeInt()) {
       assert(false && "expected integer type");
       return nullptr;
     }
-  } else if (MangledName.endswith("f32")) {
+  } else if (MangledName.endswith("f16") || MangledName.endswith("f32")) {
     if (!shuffle_op_type->isTypeFloat()) {
       assert(false && "expected float type");
       return nullptr;
@@ -4108,14 +4111,17 @@ SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_op(StringRef MangledName,
   auto spv_item_value = transValue(item_value, BB);
   auto group_op_type = spv_item_value->getType();
 
-  if (MangledName.endswith("s32")) {
+  if (MangledName.endswith("s8") || MangledName.endswith("s16") ||
+      MangledName.endswith("s32") || MangledName.endswith("s64")) {
     if (!group_op_type->isTypeInt()) {
       assert(false && "expected integer type");
       return nullptr;
     }
     const auto int_type = (const SPIRVTypeInt *)group_op_type;
-    if (int_type->getBitWidth() != 32) {
-      assert(false && "sub-group ops only support 32-bit types");
+    const auto bit_width = int_type->getBitWidth();
+    if (bit_width != 8 && bit_width != 16 && bit_width != 32 &&
+        bit_width != 64) {
+      assert(false && "int sub-group ops only support 8-/16-/32-/64-bit types");
       return nullptr;
     }
     // depending on the op, we may need to perform type conversion
@@ -4126,14 +4132,18 @@ SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_op(StringRef MangledName,
     }
 
     // NOTE: opcode is already correct here
-  } else if (MangledName.endswith("u32")) {
+  } else if (MangledName.endswith("u8") || MangledName.endswith("u16") ||
+             MangledName.endswith("u32") || MangledName.endswith("u64")) {
     if (!group_op_type->isTypeInt()) {
       assert(false && "expected integer type");
       return nullptr;
     }
     const auto int_type = (const SPIRVTypeInt *)group_op_type;
-    if (int_type->getBitWidth() != 32) {
-      assert(false && "sub-group ops only support 32-bit types");
+    const auto bit_width = int_type->getBitWidth();
+    if (bit_width != 8 && bit_width != 16 && bit_width != 32 &&
+        bit_width != 64) {
+      assert(false &&
+             "uint sub-group ops only support 8-/16-/32-/64-bit types");
       return nullptr;
     }
     // depending on the op, we may need to perform type conversion
@@ -4156,13 +4166,16 @@ SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_op(StringRef MangledName,
     default:
       break;
     }
-  } else if (MangledName.endswith("f32")) {
+  } else if (MangledName.endswith("f16") || MangledName.endswith("f32")) {
     if (!group_op_type->isTypeFloat()) {
       assert(false && "expected float type");
       return nullptr;
     }
-    if (((const SPIRVTypeFloat *)group_op_type)->getBitWidth() != 32) {
-      assert(false && "sub-group ops only support 32-bit types");
+    const auto bit_width =
+        ((const SPIRVTypeFloat *)group_op_type)->getBitWidth();
+    if (bit_width != 16 && bit_width != 32) {
+      assert(false &&
+             "float sub-group ops only support 16-bit and 32-bit types");
       return nullptr;
     }
 
