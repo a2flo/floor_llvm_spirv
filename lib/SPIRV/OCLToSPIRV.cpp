@@ -969,6 +969,8 @@ void OCLToSPIRVBase::transAtomicBuiltin(CallInst *CI,
                       if (I == 0) {
                         // -> all atomic ops except CAS #2 parameter
                         Ord = OCLMO_acq_rel;
+                        // always make available with Vulkan memory model
+                        memsem = memsem | spv::MemorySemanticsMakeAvailableMask;
                       } else {
                         // -> CAS #2 parameter (Unequal)
                         // "Unequal must not be set to Release or Acquire and
@@ -977,8 +979,9 @@ void OCLToSPIRVBase::transAtomicBuiltin(CallInst *CI,
                         Ord = OCLMO_acquire;
                       }
                     }
-                    // always mark volatile with Vulkan memory model
+                    // always mark as volatile + make visible with Vulkan memory model
                     memsem = memsem | spv::MemorySemanticsVolatileMask;
+                    memsem = memsem | spv::MemorySemanticsMakeVisibleMask;
                   }
                   return mapOCLMemSemanticToSPIRV(
                              0, static_cast<OCLMemOrderKind>(Ord)) |

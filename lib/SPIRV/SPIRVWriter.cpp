@@ -2039,14 +2039,48 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
     return mapValue(V, BI);
   }
 
-  if (SelectInst *Sel = dyn_cast<SelectInst>(V))
-    return mapValue(
-        V,
-        BM->addSelectInst(
-            transValue(Sel->getCondition(), BB),
-            transValue(Sel->getTrueValue(), BB, true, FuncTransMode::Pointer),
-            transValue(Sel->getFalseValue(), BB, true, FuncTransMode::Pointer),
-            BB));
+  if (SelectInst *Sel = dyn_cast<SelectInst>(V)) {
+    auto op_0 =
+        transValue(Sel->getTrueValue(), BB, true, FuncTransMode::Pointer);
+    auto op_1 =
+        transValue(Sel->getFalseValue(), BB, true, FuncTransMode::Pointer);
+    auto op_0_type = op_0->getType();
+    auto op_1_type = op_1->getType();
+    if (op_0_type != op_1_type) {
+      // handle integer sign mismatch
+      if (op_0_type->isTypeVectorInt() && op_1_type->isTypeVectorInt()) {
+        auto op_0_vec_int_type =
+            (SPIRVTypeInt *)op_0_type->getVectorComponentType();
+        auto op_1_vec_int_type =
+            (SPIRVTypeInt *)op_1_type->getVectorComponentType();
+        if (op_0_vec_int_type->getBitWidth() !=
+            op_1_vec_int_type->getBitWidth()) {
+          BM->getErrorLog().checkError(
+              false, SPIRVErrorCode::SPIRVEC_InvalidInstruction, V,
+              "type mismatch (bitwidth) in select instruction");
+          return nullptr;
+        }
+        op_1 = BM->addUnaryInst(spv::OpBitcast, op_0_vec_int_type, op_1, BB);
+      } else if (op_0_type->isTypeInt() && op_1_type->isTypeInt()) {
+        auto op_0_int_type = (SPIRVTypeInt *)op_0_type;
+        auto op_1_int_type = (SPIRVTypeInt *)op_1_type;
+        if (op_0_int_type->getBitWidth() != op_1_int_type->getBitWidth()) {
+          BM->getErrorLog().checkError(
+              false, SPIRVErrorCode::SPIRVEC_InvalidInstruction, V,
+              "type mismatch (bitwidth) in select instruction");
+          return nullptr;
+        }
+        op_1 = BM->addUnaryInst(spv::OpBitcast, op_0_int_type, op_1, BB);
+      } else {
+        BM->getErrorLog().checkError(false,
+                                     SPIRVErrorCode::SPIRVEC_InvalidInstruction,
+                                     V, "type mismatch in select instruction");
+        return nullptr;
+      }
+    }
+    return mapValue(V, BM->addSelectInst(transValue(Sel->getCondition(), BB),
+                                         op_0, op_1, BB));
+  }
 
   if (AllocaInst *Alc = dyn_cast<AllocaInst>(V)) {
     if (Alc->isArrayAllocation()) {
@@ -4472,7 +4506,9 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
                                        spv::MemorySemanticsUniformMemoryMask |
                                        spv::MemorySemanticsSubgroupMemoryMask |
                                        spv::MemorySemanticsWorkgroupMemoryMask |
-                                       spv::MemorySemanticsImageMemoryMask,
+                                       spv::MemorySemanticsImageMemoryMask |
+                                       spv::MemorySemanticsMakeAvailableMask |
+                                       spv::MemorySemanticsMakeVisibleMask,
                                    true);
       return BM->addControlBarrierInst(wg_scope, wg_scope, wg_sema, BB);
     } else if (MangledName == "floor.barrier.global" ||
@@ -4486,7 +4522,9 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
                                        spv::MemorySemanticsUniformMemoryMask |
                                        spv::MemorySemanticsSubgroupMemoryMask |
                                        spv::MemorySemanticsWorkgroupMemoryMask |
-                                       spv::MemorySemanticsImageMemoryMask,
+                                       spv::MemorySemanticsImageMemoryMask |
+                                       spv::MemorySemanticsMakeAvailableMask |
+                                       spv::MemorySemanticsMakeVisibleMask,
                                    true);
       return BM->addControlBarrierInst(wg_scope, wg_scope, wg_sema, BB);
     } else if (MangledName == "floor.exit") {
