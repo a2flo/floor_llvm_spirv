@@ -196,6 +196,8 @@ static bool write_container(Module &M, raw_ostream &OS) {
     exts[SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add] = true;
     exts[SPIRV::ExtensionID::SPV_KHR_fragment_shader_barycentric] = true;
     exts[SPIRV::ExtensionID::SPV_KHR_workgroup_memory_explicit_layout] = true;
+    exts[SPIRV::ExtensionID::SPV_KHR_maximal_reconvergence] = true;
+    exts[SPIRV::ExtensionID::SPV_KHR_subgroup_uniform_control_flow] = true;
     //exts[SPIRV::ExtensionID::SPV_KHR_no_integer_wrap_decoration] = true;
     //exts[SPIRV::ExtensionID::SPV_KHR_float_controls] = true;
     SPIRV::TranslatorOpts opts(SPIRV::VersionNumber::MaximumVersion, exts);

@@ -1925,12 +1925,14 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
     if (auto addr_space = ST->getPointerAddressSpace();
         SrcLang == spv::SourceLanguageGLSL &&
         (addr_space == SPIRAS_StorageBuffer ||
-         addr_space == SPIRAS_PhysicalStorageBuffer)) {
+         addr_space == SPIRAS_PhysicalStorageBuffer ||
+         addr_space == SPIRAS_Local)) {
       MemoryAccess[0] |= MemoryAccessMakePointerAvailableMask |
                          MemoryAccessNonPrivatePointerMask;
+      const auto scope =
+          (addr_space == SPIRAS_Local ? ScopeWorkgroup : ScopeDevice);
       MemoryAccess.push_back(
-          BM->addIntegerConstant(BM->addIntegerType(32, true), ScopeDevice)
-              ->getId());
+          BM->addIntegerConstant(BM->addIntegerType(32, true), scope)->getId());
     }
     if (MDNode *AliasingListMD = ST->getMetadata(LLVMContext::MD_alias_scope))
       transAliasingMemAccess(BM, AliasingListMD, MemoryAccess,
@@ -1991,16 +1993,19 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
     }
     if (LD->getMetadata(LLVMContext::MD_nontemporal))
       MemoryAccess[0] |= MemoryAccessNontemporalMask;
-    // always mark global/device pointer with "MakePointerVisible"
+    // always mark pointers with "MakePointerVisible"
     if (auto addr_space = LD->getPointerAddressSpace();
         SrcLang == spv::SourceLanguageGLSL &&
         (addr_space == SPIRAS_StorageBuffer ||
-         addr_space == SPIRAS_PhysicalStorageBuffer)) {
+         addr_space == SPIRAS_PhysicalStorageBuffer ||
+         addr_space == SPIRAS_Local || addr_space == SPIRAS_Image ||
+         addr_space == SPIRAS_Uniform || addr_space == SPIRAS_Constant)) {
       MemoryAccess[0] |= MemoryAccessMakePointerVisibleMask |
                          MemoryAccessNonPrivatePointerMask;
+      const auto scope =
+          (addr_space == SPIRAS_Local ? ScopeWorkgroup : ScopeDevice);
       MemoryAccess.push_back(
-          BM->addIntegerConstant(BM->addIntegerType(32, true), ScopeDevice)
-              ->getId());
+          BM->addIntegerConstant(BM->addIntegerType(32, true), scope)->getId());
     }
     if (MDNode *AliasingListMD = LD->getMetadata(LLVMContext::MD_alias_scope))
       transAliasingMemAccess(BM, AliasingListMD, MemoryAccess,
@@ -5568,13 +5573,19 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
       return;
     }
 
-    // always add this
+    // always add these
     if (stage == VULKAN_STAGE::VERTEX) {
       BM->addCapability(CapabilityDrawParameters);
     } else if (stage == VULKAN_STAGE::FRAGMENT) {
       BF->addExecutionMode(
           new SPIRVExecutionMode(BF, ExecutionModeOriginUpperLeft));
     }
+    BM->addExtension(ExtensionID::SPV_KHR_maximal_reconvergence);
+    BF->addExecutionMode(
+        new SPIRVExecutionMode(BF, ExecutionModeMaximallyReconvergesKHR));
+    BM->addExtension(ExtensionID::SPV_KHR_subgroup_uniform_control_flow);
+    BF->addExecutionMode(
+        new SPIRVExecutionMode(BF, ExecutionModeSubgroupUniformControlFlowKHR));
 
     const std::string func_name = F->getName().str();
     std::vector<std::string> md_data_input, md_data_output;
@@ -6282,7 +6293,7 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
         const auto global_name = func_name + ".vulkan_constant.local_size";
         auto gv_wg_size = M->getNamedGlobal(global_name);
 
-        // NOTE: 128 is the minimum value that has to be supported for x
+        // NOTE: 128 is the minimum value that has to be supported in the X dim
         uint32_t default_wg_size_vals[3]{128, 1, 1};
 
         auto uint_type = BM->addIntegerType(32, false);
