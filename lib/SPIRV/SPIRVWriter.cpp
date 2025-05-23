@@ -4516,6 +4516,19 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
                                        spv::MemorySemanticsMakeVisibleMask,
                                    true);
       return BM->addControlBarrierInst(wg_scope, wg_scope, wg_sema, BB);
+    } else if (MangledName == "floor.barrier.simd") {
+      const auto simd_scope =
+          BM->getLiteralAsConstant(spv::ScopeSubgroup, true);
+      const auto simd_sema =
+          BM->getLiteralAsConstant(spv::MemorySemanticsAcquireReleaseMask |
+                                       spv::MemorySemanticsUniformMemoryMask |
+                                       spv::MemorySemanticsSubgroupMemoryMask |
+                                       spv::MemorySemanticsWorkgroupMemoryMask |
+                                       spv::MemorySemanticsImageMemoryMask |
+                                       spv::MemorySemanticsMakeAvailableMask |
+                                       spv::MemorySemanticsMakeVisibleMask,
+                                   true);
+      return BM->addControlBarrierInst(simd_scope, simd_scope, simd_sema, BB);
     } else if (MangledName == "floor.barrier.global" ||
                MangledName == "floor.barrier.full" ||
                MangledName == "floor.barrier.image") {
