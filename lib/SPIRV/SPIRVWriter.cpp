@@ -1689,6 +1689,52 @@ void transAliasingMemAccess(SPIRVModule *BM, MDNode *AliasingListMD,
   MemoryAccess.push_back(MemAliasList->getId());
 }
 
+std::vector<SPIRVValue *> LLVMToSPIRVBase::translate_indices(
+    SPIRVBasicBlock *BB, const std::vector<llvm::Value *> &llvm_indices,
+    const SPIRVStorageClassKind storage_class) {
+  std::vector<SPIRVValue *> indices;
+  for (auto &llvm_idx : llvm_indices) {
+    if (auto const_idx = dyn_cast_or_null<ConstantInt>(llvm_idx); const_idx) {
+      // preempt const index translation: this ensures these indices are
+      // unsigned and have a correct bitness
+      const auto const_val = const_idx->getZExtValue();
+      indices.push_back(BM->addIntegerConstant(
+          BM->addIntegerType(const_val > 0xFFFF'FFFFull ? 64u : 32u, false),
+          const_val));
+      continue;
+    }
+
+    auto idx = transValue(llvm_idx, BB);
+    if (SrcLang == spv::SourceLanguageGLSL) {
+      // for Vulkan: since signed integers are the default int type and values
+      // may be signed, even when originating from a uint, we must ensure that
+      // the sign bit is never set for those types
+      // -> for general memory accesses we bitcast all int types <= 32-bit to
+      //    their corresponding unsigned type
+      // -> for work-group memory accesses, we only do this for int types
+      //    <= 16-bit as we can assume that no GPU has local memory >= 2GiB
+      // -> also ensure that indices are at least 16-bit, since certain
+      //    backend compilers don't like 8-bit indices
+      const auto idx_type = idx->getType();
+      assert(idx_type->isTypeInt());
+      const auto idx_int_type = (SPIRVTypeInt *)idx_type;
+      const auto bitness = idx_int_type->getBitWidth();
+      const auto fix_bitness =
+          (storage_class == spv::StorageClassWorkgroup ? 16u : 32u);
+      if (idx_int_type->isSigned() && bitness <= fix_bitness) {
+        idx = BM->addUnaryInst(spv::OpBitcast,
+                               BM->addIntegerType(bitness, false), idx, BB);
+        if (bitness < 16u) {
+          idx = BM->addUnaryInst(spv::OpUConvert,
+                                 BM->addIntegerType(16u, false), idx, BB);
+        }
+      }
+    }
+    indices.push_back(idx);
+  }
+  return indices;
+}
+
 /// An instruction may use an instruction from another BB which has not been
 /// translated. SPIRVForward should be created as place holder for these
 /// instructions and replaced later by the real instructions.
@@ -2323,12 +2369,20 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
   }
 
   if (GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(V)) {
-    std::vector<SPIRVValue *> Indices;
-    for (unsigned I = 0, E = GEP->getNumIndices(); I != E; ++I)
-      Indices.push_back(transValue(GEP->getOperand(I + 1), BB));
+    auto gep_type = transType(GEP->getType());
+    auto PointerOperand = GEP->getPointerOperand();
+    auto gep_value = transValue(PointerOperand, BB);
+    auto gep_value_type = gep_value->getType();
+    const auto storage_class = gep_value_type->getPointerStorageClass();
+    std::vector<llvm::Value *> llvm_indices;
+    llvm_indices.reserve(GEP->getNumIndices());
+    for (unsigned I = 0, E = GEP->getNumIndices(); I != E; ++I) {
+      llvm_indices.emplace_back(GEP->getOperand(I + 1));
+    }
+    auto Indices = translate_indices(BB, llvm_indices, storage_class);
+
     if (SrcLang != spv::SourceLanguageGLSL) {
-      auto *PointerOperand = GEP->getPointerOperand();
-      auto *TransPointerOperand = transValue(PointerOperand, BB);
+      auto *TransPointerOperand = gep_value;
 
       // Certain array-related optimization hints can be expressed via
       // LLVM metadata. For the purpose of linking this metadata with
@@ -2361,16 +2415,12 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
         }
       }
 
-      return mapValue(V, BM->addPtrAccessChainInst(transType(GEP->getType()),
+      return mapValue(V, BM->addPtrAccessChainInst(gep_type,
                                                    TransPointerOperand, Indices,
                                                    BB, GEP->isInBounds()));
     } else {
       // with variable pointers we can now use PtrAccessChain instead of the
       // simple AccessChain (for SSBOs, local memory and physical SSBOs)
-      auto gep_type = transType(GEP->getType());
-      auto gep_value = transValue(GEP->getPointerOperand(), BB);
-      auto gep_value_type = gep_value->getType();
-      const auto storage_class = gep_value_type->getPointerStorageClass();
       if (storage_class == spv::StorageClassWorkgroup ||
           storage_class == spv::StorageClassPhysicalStorageBuffer ||
           storage_class == spv::StorageClassStorageBuffer) {
@@ -2383,8 +2433,8 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
                 (SPIRV::SPIRVTypeStruct *)gep_value_elem_type;
             if (gep_struct_type->getMemberCount() > 0 &&
                 gep_struct_type->getMemberType(0)->isTypeRuntimeArray()) {
-              auto zero_const = transValue(
-                  llvm::ConstantInt::get(llvm::Type::getInt32Ty(*Ctx), 0), BB);
+              auto zero_const =
+                  BM->addIntegerConstant(BM->addIntegerType(32u, false), 0u);
               Indices.insert(Indices.begin(), zero_const);
               Indices.insert(Indices.begin(), zero_const);
             }
@@ -4378,10 +4428,14 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
                                              img_type_iter->second);
 
       auto img_array = transValue(CI->getOperand(0), BB);
-      std::vector<SPIRVValue *> indices;
-      for (uint32_t arg_idx = 1; arg_idx < CI->arg_size(); ++arg_idx) {
-        indices.emplace_back(transValue(CI->getArgOperand(arg_idx), BB));
+      std::vector<llvm::Value *> llvm_indices;
+      llvm_indices.reserve(CI->arg_size() - 1);
+      for (uint32_t arg_idx = 1 /* first index */, arg_count = CI->arg_size();
+           arg_idx < arg_count; ++arg_idx) {
+        llvm_indices.emplace_back(CI->getArgOperand(arg_idx));
       }
+      auto indices =
+          translate_indices(BB, llvm_indices, spv::StorageClassUniformConstant);
       auto gep = BM->addAccessChainInst(img_ptr_type, img_array, indices, BB,
                                         true, false);
       auto ld = BM->addLoadInst(gep, {}, BB);
@@ -4391,11 +4445,14 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
       return ld;
     } else if (MangledName.startswith("floor.ssbo_array_gep.")) {
       auto base = transValue(CI->getOperand(0), BB);
-      std::vector<SPIRVValue *> indices;
-      for (uint32_t arg_idx = 1 /* first index */; arg_idx < CI->arg_size();
-           ++arg_idx) {
-        indices.emplace_back(transValue(CI->getArgOperand(arg_idx), BB));
+      std::vector<llvm::Value *> llvm_indices;
+      llvm_indices.reserve(CI->arg_size() - 1);
+      for (uint32_t arg_idx = 1 /* first index */, arg_count = CI->arg_size();
+           arg_idx < arg_count; ++arg_idx) {
+        llvm_indices.emplace_back(CI->getArgOperand(arg_idx));
       }
+      const auto storage_class = base->getType()->getPointerStorageClass();
+      auto indices = translate_indices(BB, llvm_indices, storage_class);
       auto ptr_type = CI->getType();
       assert(ptr_type->isPointerTy());
       assert(ptr_type->getPointerAddressSpace() == 0 ||
@@ -4751,98 +4808,74 @@ bool LLVMToSPIRVBase::transGlobalVariables() {
   // add global fixed/immutable samplers array that is always present
   if (SrcLang == spv::SourceLanguageGLSL) {
     static constexpr const uint32_t fixed_sampler_count{48u};
-    if (bool has_vulkan_descriptor_buffer =
-            M->getNamedMetadata("floor.vulkan_descriptor_buffer");
-        has_vulkan_descriptor_buffer) {
-      // -> for descriptor buffer use
-      auto sampler_type = BM->addPointerType(spv::StorageClassUniformConstant,
-                                             BM->addSamplerType());
-      for (uint32_t i = 0; i < fixed_sampler_count; ++i) {
-        auto var_name = "vulkan.immutable_sampler_" + std::to_string(i);
+    // via descriptor buffer
+    auto sampler_type = BM->addPointerType(spv::StorageClassUniformConstant,
+                                           BM->addSamplerType());
+    for (uint32_t i = 0; i < fixed_sampler_count; ++i) {
+      auto var_name = "vulkan.immutable_sampler_" + std::to_string(i);
 #if defined(_DEBUG)
-        using namespace vulkan_sampling;
-        switch (
-            sampler::FILTER_MODE(i & uint32_t(sampler::__FILTER_MODE_MASK))) {
-        case sampler::FILTER_MODE::NEAREST:
-          var_name += "_nearest";
-          break;
-        case sampler::FILTER_MODE::LINEAR:
-          var_name += "_linear";
-          break;
-        }
-        switch (
-            sampler::ADDRESS_MODE(i & uint32_t(sampler::__ADDRESS_MODE_MASK))) {
-        case sampler::ADDRESS_MODE::CLAMP_TO_EDGE:
-          var_name += "_clamp";
-          break;
-        case sampler::ADDRESS_MODE::REPEAT:
-          var_name += "_repeat";
-          break;
-        case sampler::ADDRESS_MODE::REPEAT_MIRRORED:
-          var_name += "_repeat_mirrored";
-          break;
-        default:
-          break;
-        }
-        switch (sampler::COMPARE_FUNCTION(
-            i & uint32_t(sampler::__COMPARE_FUNCTION_MASK))) {
-        case sampler::COMPARE_FUNCTION::NEVER:
-          // implicitly handled as no-compare
-          break;
-        case sampler::COMPARE_FUNCTION::LESS:
-          var_name += "_cmp(<)";
-          break;
-        case sampler::COMPARE_FUNCTION::EQUAL:
-          var_name += "_cmp(==)";
-          break;
-        case sampler::COMPARE_FUNCTION::LESS_OR_EQUAL:
-          var_name += "_cmp(<=)";
-          break;
-        case sampler::COMPARE_FUNCTION::GREATER:
-          var_name += "_cmp(>)";
-          break;
-        case sampler::COMPARE_FUNCTION::NOT_EQUAL:
-          var_name += "_cmp(!=)";
-          break;
-        case sampler::COMPARE_FUNCTION::GREATER_OR_EQUAL:
-          var_name += "_cmp(>=)";
-          break;
-        case sampler::COMPARE_FUNCTION::ALWAYS:
-          var_name += "_cmp(a)";
-          break;
-        default:
-          break;
-        }
-#endif
-        auto immutable_sampler_var =
-            static_cast<SPIRVVariable *>(BM->addVariable(
-                sampler_type, true, spv::internal::LinkageTypeInternal, nullptr,
-                var_name, spv::StorageClassUniformConstant, nullptr));
-        BM->setName(immutable_sampler_var, var_name);
-        immutable_sampler_var->addDecorate(new SPIRVDecorate(
-            DecorationDescriptorSet, immutable_sampler_var, 0));
-        immutable_sampler_var->addDecorate(
-            new SPIRVDecorate(DecorationBinding, immutable_sampler_var, i));
-        immutable_samplers.emplace_back(immutable_sampler_var);
+      using namespace vulkan_sampling;
+      switch (sampler::FILTER_MODE(i & uint32_t(sampler::__FILTER_MODE_MASK))) {
+      case sampler::FILTER_MODE::NEAREST:
+        var_name += "_nearest";
+        break;
+      case sampler::FILTER_MODE::LINEAR:
+        var_name += "_linear";
+        break;
       }
-    } else {
-      // -> legacy
-      auto samplers_type =
-          BM->addPointerType(spv::StorageClassUniformConstant,
-                             BM->addArrayType(BM->addSamplerType(),
-                                              BM->getLiteralAsConstant(
-                                                  fixed_sampler_count, false)));
-      auto immutable_samplers_var =
-          static_cast<SPIRVVariable *>(BM->addVariable(
-              samplers_type, true, spv::internal::LinkageTypeInternal, nullptr,
-              "vulkan.immutable_samplers", spv::StorageClassUniformConstant,
-              nullptr));
-      BM->setName(immutable_samplers_var, "vulkan.immutable_samplers");
-      immutable_samplers_var->addDecorate(new SPIRVDecorate(
-          DecorationDescriptorSet, immutable_samplers_var, 0));
-      immutable_samplers_var->addDecorate(
-          new SPIRVDecorate(DecorationBinding, immutable_samplers_var, 0));
-      immutable_samplers.emplace_back(immutable_samplers_var);
+      switch (
+          sampler::ADDRESS_MODE(i & uint32_t(sampler::__ADDRESS_MODE_MASK))) {
+      case sampler::ADDRESS_MODE::CLAMP_TO_EDGE:
+        var_name += "_clamp";
+        break;
+      case sampler::ADDRESS_MODE::REPEAT:
+        var_name += "_repeat";
+        break;
+      case sampler::ADDRESS_MODE::REPEAT_MIRRORED:
+        var_name += "_repeat_mirrored";
+        break;
+      default:
+        break;
+      }
+      switch (sampler::COMPARE_FUNCTION(
+          i & uint32_t(sampler::__COMPARE_FUNCTION_MASK))) {
+      case sampler::COMPARE_FUNCTION::NEVER:
+        // implicitly handled as no-compare
+        break;
+      case sampler::COMPARE_FUNCTION::LESS:
+        var_name += "_cmp(<)";
+        break;
+      case sampler::COMPARE_FUNCTION::EQUAL:
+        var_name += "_cmp(==)";
+        break;
+      case sampler::COMPARE_FUNCTION::LESS_OR_EQUAL:
+        var_name += "_cmp(<=)";
+        break;
+      case sampler::COMPARE_FUNCTION::GREATER:
+        var_name += "_cmp(>)";
+        break;
+      case sampler::COMPARE_FUNCTION::NOT_EQUAL:
+        var_name += "_cmp(!=)";
+        break;
+      case sampler::COMPARE_FUNCTION::GREATER_OR_EQUAL:
+        var_name += "_cmp(>=)";
+        break;
+      case sampler::COMPARE_FUNCTION::ALWAYS:
+        var_name += "_cmp(a)";
+        break;
+      default:
+        break;
+      }
+#endif
+      auto immutable_sampler_var = static_cast<SPIRVVariable *>(BM->addVariable(
+          sampler_type, true, spv::internal::LinkageTypeInternal, nullptr,
+          var_name, spv::StorageClassUniformConstant, nullptr));
+      BM->setName(immutable_sampler_var, var_name);
+      immutable_sampler_var->addDecorate(
+          new SPIRVDecorate(DecorationDescriptorSet, immutable_sampler_var, 0));
+      immutable_sampler_var->addDecorate(
+          new SPIRVDecorate(DecorationBinding, immutable_sampler_var, i));
+      immutable_samplers.emplace_back(immutable_sampler_var);
     }
   }
 
@@ -7065,23 +7098,9 @@ LLVMToSPIRVBase::transVulkanImageFunction(CallInst *CI, SPIRVBasicBlock *BB,
     SPIRVValue *loaded_sampler = nullptr;
     SPIRVValue *img = loaded_img;
     if (!is_fetch) {
-      const bool has_vulkan_descriptor_buffer =
-          (M->getNamedMetadata("floor.vulkan_descriptor_buffer") != nullptr);
-      if (has_vulkan_descriptor_buffer) {
-        // -> for descriptor buffer use
-        loaded_sampler =
-            BM->addLoadInst(immutable_samplers[sampler_val.value], {}, BB);
-      } else {
-        // -> legacy
-        std::vector<SPIRVValue *> indices{
-            BM->getLiteralAsConstant(sampler_val.value, false)};
-
-        auto sampler_ptr = BM->addAccessChainInst(
-            BM->addPointerType(spv::StorageClassUniformConstant,
-                               BM->addSamplerType()),
-            immutable_samplers[0], indices, BB, true);
-        loaded_sampler = BM->addLoadInst(sampler_ptr, {}, BB);
-      }
+      // via descriptor buffer
+      loaded_sampler =
+          BM->addLoadInst(immutable_samplers[sampler_val.value], {}, BB);
 
       // create the sampled image
       std::vector<SPIRVWord> sampled_img_ops{
@@ -7332,8 +7351,6 @@ LLVMToSPIRVBase::transVulkanImageFunction(CallInst *CI, SPIRVBasicBlock *BB,
     assert(CI->getParent()->getParent()->getCallingConv() ==
                CallingConv::FLOOR_FRAGMENT &&
            "must only be called in a fragment shader");
-    assert(M->getNamedMetadata("floor.vulkan_descriptor_buffer") != nullptr &&
-           "must have descripter buffer support");
 
     // retrieve the sampler idx, load the sampler and create the sampled image
     auto sampler_idx_arg = dyn_cast<ConstantInt>(args[1]);

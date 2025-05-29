@@ -228,6 +228,12 @@ private:
 
   void decorateComposite(llvm::Type *llvm_type, SPIRVType *spirv_type);
 
+  //! translates indices for use in GEPs and libfloor array loads
+  std::vector<SPIRVValue *>
+  translate_indices(SPIRVBasicBlock *BB,
+                    const std::vector<llvm::Value *> &llvm_indices,
+                    const SPIRVStorageClassKind storage_class);
+
   bool ignore_next_unreachable{false};
 
   //
