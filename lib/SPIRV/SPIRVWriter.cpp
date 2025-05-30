@@ -1904,7 +1904,11 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
     if (Ty->isPointerTy()) {
       auto elem_type = Ty->getPointerElementType();
       auto spirv_elem_type = transType(elem_type);
-      decorateComposite(elem_type, spirv_elem_type);
+      if (auto addr_space = Ty->getPointerAddressSpace();
+          addr_space != SPIRAS_Private && addr_space != SPIRAS_Constant &&
+          addr_space != SPIRAS_VulkanPrivate) {
+        decorateComposite(elem_type, spirv_elem_type);
+      }
     }
     spv::BuiltIn Builtin = spv::BuiltInPosition;
     if (!GV->hasName() || !getSPIRVBuiltin(GV->getName().str(), Builtin))
@@ -2045,7 +2049,7 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
         (addr_space == SPIRAS_StorageBuffer ||
          addr_space == SPIRAS_PhysicalStorageBuffer ||
          addr_space == SPIRAS_Local || addr_space == SPIRAS_Image ||
-         addr_space == SPIRAS_Uniform || addr_space == SPIRAS_Constant)) {
+         addr_space == SPIRAS_Uniform)) {
       MemoryAccess[0] |= MemoryAccessMakePointerVisibleMask |
                          MemoryAccessNonPrivatePointerMask;
       const auto scope =
