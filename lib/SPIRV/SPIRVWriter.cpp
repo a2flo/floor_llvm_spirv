@@ -5583,6 +5583,101 @@ static bool is_write_only_arg(Function &F, Argument &arg) {
   return user_recurse(&arg);
 }
 
+/// Returns a range that traverses \p F ensuring that dominator blocks are
+/// visited before the blocks they dominate.
+///
+/// Compared to llvm::ReversePostOrderTraversal which also visits dominators
+/// before dominated blocks, this traversal aims to be more stable and will keep
+/// basic blocks in their original order as much as possible, only reordering
+/// them to visit dominators ahead of their dominated blocks when needed. \p DT
+/// is not copied by this function and needs to outlive any iterators created
+/// from this range.
+static auto stablePreDominatorTraversal(Function &F, const DominatorTree &DT) {
+
+  // A local iterator type for traversing a function in the desired order.
+  class StablePreDominatorIterator
+      : public iterator_facade_base<StablePreDominatorIterator,
+                                    std::forward_iterator_tag, BasicBlock> {
+
+    // The passed DominatorTree; may be unset for end iterators.
+    const DominatorTree *DT = nullptr;
+
+    // The set of basic blocks already visited in this traversal.
+    SmallPtrSet<const BasicBlock *, 4> VisitedBBs;
+
+    // The next basic block in original function order, or nullptr if the
+    // traversal is over.
+    BasicBlock *NextBB = nullptr;
+
+    // The current basic block in the traversal, or nullptr for end iterators.
+    BasicBlock *CurBB = nullptr;
+
+    // Returns the most immediate dominator of \p BB which does not have an
+    // unvisited dominator and so can be visited in this traversal.
+    BasicBlock *visitableDominator(BasicBlock *BB) const {
+
+      // Find BB's dominator; if there is none, BB can be visited immediately.
+      const auto *const BBNode = DT->getNode(BB);
+      if (!BBNode)
+        return BB;
+      const auto *const DomNode = BBNode->getIDom();
+      if (!DomNode)
+        return BB;
+      BasicBlock *const Dominator = DomNode->getBlock();
+
+      // If the dominator's been visited, BB can now be visited.
+      if (VisitedBBs.contains(Dominator))
+        return BB;
+
+      // Otherwise, find the dominator's visitable dominator instead.
+      return visitableDominator(Dominator);
+    }
+
+    // Advances the iterator and returns the next basic block to be visited in
+    // the traversal.
+    BasicBlock *next() {
+
+      // If NextBB is nullptr, the end of the traversal has been reached.
+      if (!NextBB)
+        return nullptr;
+
+      // Check if NextBB has already been visited; if so, advance past it.
+      if (VisitedBBs.contains(NextBB)) {
+        NextBB = NextBB->getNextNode();
+        return next();
+      }
+
+      // If NextBB is unvisited, visit its next visitable dominator.
+      BasicBlock *const ToVisit = visitableDominator(NextBB);
+      VisitedBBs.insert(ToVisit);
+      return ToVisit;
+    }
+
+  public:
+    // Constructs an end iterator.
+    StablePreDominatorIterator() {}
+
+    // Constructs a begin iterator at the start of \p F.
+    StablePreDominatorIterator(Function &F, const DominatorTree &DT)
+        : DT(&DT), NextBB(&F.getEntryBlock()) {
+      ++*this;
+    }
+
+    // Methods required by iterator_facade_base.
+    bool operator==(const StablePreDominatorIterator &Other) const {
+      return CurBB == Other.CurBB;
+    }
+    BasicBlock &operator*() const { return *CurBB; }
+    StablePreDominatorIterator &operator++() {
+      CurBB = next();
+      return *this;
+    }
+  };
+
+  return make_range(StablePreDominatorIterator(F, DT),
+                    StablePreDominatorIterator());
+}
+
 void LLVMToSPIRVBase::transFunction(Function *F) {
   // again, ignore any floor.* functions
   if (F->getName().startswith("floor."))
@@ -6323,9 +6418,12 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
       }
     }
 
-    // Create all basic blocks before creating any instruction.
-    for (Function::iterator FI = F->begin(), FE = F->end(); FI != FE; ++FI) {
-      transValue(&*FI, nullptr);
+    // Create all basic blocks before creating any instruction. SPIR-V requires
+    // that blocks appear after their dominators, so stablePreDominatorTraversal
+    // is used to ensure blocks are written in the right order.
+    const DominatorTree DT(*F);
+    for (BasicBlock &FI : stablePreDominatorTraversal(*F, DT)) {
+      transValue(&FI, nullptr);
     }
 
     // set compute shader constant work-group size
@@ -6401,8 +6499,11 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
       }
     }
   } else if (SrcLang != SourceLanguageGLSL) {
-    // Creating all basic blocks before creating any instruction.
-    for (auto &FI : *F) {
+    // Create all basic blocks before creating any instruction. SPIR-V requires
+    // that blocks appear after their dominators, so stablePreDominatorTraversal
+    // is used to ensure blocks are written in the right order.
+    const DominatorTree DT(*F);
+    for (BasicBlock &FI : stablePreDominatorTraversal(*F, DT)) {
       transValue(&FI, nullptr);
     }
   }

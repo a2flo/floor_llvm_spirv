@@ -43,7 +43,6 @@
 
 #include "llvm/ADT/StringExtras.h" // llvm::isDigit
 #include "llvm/Demangle/Demangle.h"
-#include "llvm/IR/Dominators.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Operator.h"
@@ -372,35 +371,6 @@ bool SPIRVRegularizeLLVMBase::runRegularizeLLVM(Module &Module) {
   return true;
 }
 
-// final cleanup: sort BBs according to the DT
-void sort_bbs(Function *F) {
-  // dominator fixes: reorder blocks
-  // NOTE: obviously only necessary when there are more than 2 blocks
-  if (F->getBasicBlockList().size() <= 2)
-    return;
-
-  DominatorTree DT;
-  DT.recalculate(*F);
-
-  // use the dominator tree order to sort the bbs, i.e. with the DT we already
-  // know the sorted order,
-  // we just need to physically move the blocks according to it
-  std::vector<BasicBlock *> sorted_blocks;
-  const std::function<void(const DomTreeNodeBase<BasicBlock> &)> sort_recurse =
-      [&sort_recurse, &sorted_blocks](const DomTreeNodeBase<BasicBlock> &node) {
-        sorted_blocks.emplace_back(node.getBlock());
-        for (const auto &child : node) {
-          sort_recurse(*child);
-        }
-      };
-  sort_recurse(*DT.getRootNode());
-
-  // move blocks in reverse order (not moving entry of course)
-  for (size_t i = 0, count = sorted_blocks.size(); i < count - 2; ++i) {
-    sorted_blocks[count - i - 2]->moveBefore(sorted_blocks[count - i - 1]);
-  }
-}
-
 /// Remove entities not representable by SPIR-V
 bool SPIRVRegularizeLLVMBase::regularize() {
   eraseUselessFunctions(M);
@@ -538,11 +508,6 @@ bool SPIRVRegularizeLLVMBase::regularize() {
 
   for (StructType *ST : M->getIdentifiedStructTypes())
     adaptStructTypes(ST);
-
-  // sort BBs according to DT
-  for (auto &F : *M) {
-    sort_bbs(&F);
-  }
 
   std::string Err;
   raw_string_ostream ErrorOS(Err);
