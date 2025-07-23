@@ -1971,6 +1971,7 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
     }
     if (ST->getMetadata(LLVMContext::MD_nontemporal))
       MemoryAccess[0] |= MemoryAccessNontemporalMask;
+#if 0 // NOTE: disabled for now due to performance hit -> TODO: only enable where needed
     // always mark global/device pointer with "MakePointerAvailable"
     if (auto addr_space = ST->getPointerAddressSpace();
         SrcLang == spv::SourceLanguageGLSL &&
@@ -1984,6 +1985,7 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
       MemoryAccess.push_back(
           BM->addIntegerConstant(BM->addIntegerType(32, true), scope)->getId());
     }
+#endif
     if (MDNode *AliasingListMD = ST->getMetadata(LLVMContext::MD_alias_scope))
       transAliasingMemAccess(BM, AliasingListMD, MemoryAccess,
                              internal::MemoryAccessAliasScopeINTELMask);
@@ -2043,6 +2045,7 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
     }
     if (LD->getMetadata(LLVMContext::MD_nontemporal))
       MemoryAccess[0] |= MemoryAccessNontemporalMask;
+#if 0 // NOTE: disabled for now due to performance hit -> TODO: only enable where needed
     // always mark pointers with "MakePointerVisible"
     if (auto addr_space = LD->getPointerAddressSpace();
         SrcLang == spv::SourceLanguageGLSL &&
@@ -2057,6 +2060,7 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
       MemoryAccess.push_back(
           BM->addIntegerConstant(BM->addIntegerType(32, true), scope)->getId());
     }
+#endif
     if (MDNode *AliasingListMD = LD->getMetadata(LLVMContext::MD_alias_scope))
       transAliasingMemAccess(BM, AliasingListMD, MemoryAccess,
                              internal::MemoryAccessAliasScopeINTELMask);
