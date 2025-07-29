@@ -195,65 +195,71 @@ void SPIRVRegularizeLLVMBase::lowerMemset(MemSetInst *MSI) {
 }
 
 void SPIRVRegularizeLLVMBase::lowerFunnelShift(IntrinsicInst *FSHIntrinsic) {
-  // Get a separate function - otherwise, we'd have to rework the CFG of the
-  // current one. Then simply replace the intrinsic uses with a call to the new
-  // function.
-  // Expected LLVM IR for the function: i* @spirv.llvm_fsh?_i* (i* %a, i* %b, i*
-  // %c)
-  FunctionType *FSHFuncTy = FSHIntrinsic->getFunctionType();
-  Type *FSHRetTy = FSHFuncTy->getReturnType();
-  const std::string FuncName = lowerLLVMIntrinsicName(FSHIntrinsic);
-  Function *FSHFunc =
-      getOrCreateFunction(M, FSHRetTy, FSHFuncTy->params(), FuncName);
+  // NOTE: we absolutely do *not* want a function call here
 
-  if (!FSHFunc->empty()) {
-    FSHIntrinsic->setCalledFunction(FSHFunc);
-    return;
-  }
-  auto *RotateBB = BasicBlock::Create(M->getContext(), "rotate", FSHFunc);
-  IRBuilder<> Builder(RotateBB);
-  Type *Ty = FSHFunc->getReturnType();
+  Type *Ty = FSHIntrinsic->getFunctionType()->getReturnType();
   // Build the actual funnel shift rotate logic.
   // In the comments, "int" is used interchangeably with "vector of int
   // elements".
   FixedVectorType *VectorTy = dyn_cast<FixedVectorType>(Ty);
   Type *IntTy = VectorTy ? VectorTy->getElementType() : Ty;
   unsigned BitWidth = IntTy->getIntegerBitWidth();
-  ConstantInt *BitWidthConstant = Builder.getInt({BitWidth, BitWidth});
-  Value *BitWidthForInsts =
-      VectorTy ? Builder.CreateVectorSplat(VectorTy->getNumElements(),
-                                           BitWidthConstant)
-               : BitWidthConstant;
+  ConstantInt *BitWidthConstant =
+      ConstantInt::get(IntegerType::get(*Ctx, BitWidth), BitWidth);
+  Value *BitWidthForInsts = BitWidthConstant;
+  if (VectorTy) {
+    Type *I32Ty = IntegerType::get(*Ctx, 32u);
+    Value *Poison = PoisonValue::get(FixedVectorType::get(
+        BitWidthConstant->getType(), VectorTy->getNumElements()));
+    auto splat = InsertElementInst::Create(Poison, BitWidthConstant,
+                                           ConstantInt::get(I32Ty, 0),
+                                           ".splatinsert", FSHIntrinsic);
+
+    // Shuffle the value across the desired number of elements.
+    SmallVector<int, 16> Zeros;
+    Zeros.resize(VectorTy->getNumElements());
+    BitWidthForInsts =
+        new ShuffleVectorInst(splat, PoisonValue::get(splat->getType()), Zeros,
+                              ".splat", FSHIntrinsic);
+  }
   auto *RotateModVal =
-      Builder.CreateURem(/*Rotate*/ FSHFunc->getArg(2), BitWidthForInsts);
+      BinaryOperator::CreateURem(/*Rotate*/ FSHIntrinsic->getOperand(2),
+                                 BitWidthForInsts, "", FSHIntrinsic);
   Value *FirstShift = nullptr, *SecShift = nullptr;
   if (FSHIntrinsic->getIntrinsicID() == Intrinsic::fshr)
     // Shift the less significant number right, the "rotate" number of bits
     // will be 0-filled on the left as a result of this regular shift.
-    FirstShift = Builder.CreateLShr(FSHFunc->getArg(1), RotateModVal);
+    FirstShift = BinaryOperator::CreateLShr(FSHIntrinsic->getOperand(1),
+                                            RotateModVal, "", FSHIntrinsic);
   else
     // Shift the more significant number left, the "rotate" number of bits
     // will be 0-filled on the right as a result of this regular shift.
-    FirstShift = Builder.CreateShl(FSHFunc->getArg(0), RotateModVal);
+    FirstShift = BinaryOperator::CreateShl(FSHIntrinsic->getOperand(0),
+                                           RotateModVal, "", FSHIntrinsic);
 
   // We want the "rotate" number of the more significant int's LSBs (MSBs) to
   // occupy the leftmost (rightmost) "0 space" left by the previous operation.
   // Therefore, subtract the "rotate" number from the integer bitsize...
-  auto *SubRotateVal = Builder.CreateSub(BitWidthForInsts, RotateModVal);
+  auto *SubRotateVal = BinaryOperator::CreateSub(BitWidthForInsts, RotateModVal,
+                                                 "", FSHIntrinsic);
   if (FSHIntrinsic->getIntrinsicID() == Intrinsic::fshr)
     // ...and left-shift the more significant int by this number, zero-filling
     // the LSBs.
-    SecShift = Builder.CreateShl(FSHFunc->getArg(0), SubRotateVal);
+    SecShift = BinaryOperator::CreateShl(FSHIntrinsic->getOperand(0),
+                                         SubRotateVal, "", FSHIntrinsic);
   else
     // ...and right-shift the less significant int by this number, zero-filling
     // the MSBs.
-    SecShift = Builder.CreateLShr(FSHFunc->getArg(1), SubRotateVal);
+    SecShift = BinaryOperator::CreateLShr(FSHIntrinsic->getOperand(1),
+                                          SubRotateVal, "", FSHIntrinsic);
 
   // A simple binary addition of the shifted ints yields the final result.
-  auto *FunnelShiftRes = Builder.CreateOr(FirstShift, SecShift);
-  Builder.CreateRet(FunnelShiftRes);
+  auto *FunnelShiftRes =
+      BinaryOperator::CreateOr(FirstShift, SecShift, "", FSHIntrinsic);
 
-  FSHIntrinsic->setCalledFunction(FSHFunc);
+  FunnelShiftRes->setDebugLoc(FSHIntrinsic->getDebugLoc());
+  FSHIntrinsic->replaceAllUsesWith(FunnelShiftRes);
+  FSHIntrinsic->eraseFromParent();
 }
 
 void SPIRVRegularizeLLVMBase::buildUMulWithOverflowFunc(Function *UMulFunc) {
@@ -385,120 +391,132 @@ bool SPIRVRegularizeLLVMBase::regularize() {
 
     std::vector<Instruction *> ToErase;
     for (BasicBlock &BB : *F) {
-      for (Instruction &II : BB) {
-        if (auto Call = dyn_cast<CallInst>(&II)) {
-          Call->setTailCall(false);
-          Function *CF = Call->getCalledFunction();
-          if (CF && CF->isIntrinsic()) {
-            removeFnAttr(Call, Attribute::NoUnwind);
-            auto *II = cast<IntrinsicInst>(Call);
-            if (auto *MSI = dyn_cast<MemSetInst>(II))
-              lowerMemset(MSI);
-            else if (II->getIntrinsicID() == Intrinsic::fshl ||
-                     II->getIntrinsicID() == Intrinsic::fshr)
-              lowerFunnelShift(II);
-            else if (II->getIntrinsicID() == Intrinsic::umul_with_overflow)
-              lowerUMulWithOverflow(II);
+      bool restart_bb = false;
+      do {
+        restart_bb = false;
+
+        for (Instruction &II : BB) {
+          if (auto Call = dyn_cast<CallInst>(&II)) {
+            Call->setTailCall(false);
+            Function *CF = Call->getCalledFunction();
+            if (CF && CF->isIntrinsic()) {
+              removeFnAttr(Call, Attribute::NoUnwind);
+              auto *II = cast<IntrinsicInst>(Call);
+              if (auto *MSI = dyn_cast<MemSetInst>(II))
+                lowerMemset(MSI);
+              else if (II->getIntrinsicID() == Intrinsic::fshl ||
+                       II->getIntrinsicID() == Intrinsic::fshr) {
+                lowerFunnelShift(II);
+                restart_bb = true;
+                break;
+              } else if (II->getIntrinsicID() == Intrinsic::umul_with_overflow)
+                lowerUMulWithOverflow(II);
+            }
+          }
+
+          // Remove optimization info not supported by SPIRV
+          if (auto BO = dyn_cast<BinaryOperator>(&II)) {
+            if (isa<PossiblyExactOperator>(BO) && BO->isExact())
+              BO->setIsExact(false);
+          }
+
+          // ref:
+          // https://github.com/KhronosGroup/SPIRV-LLVM-Translator/issues/1140
+          // FIXME: This is not valid handling for freeze instruction
+          if (auto FI = dyn_cast<FreezeInst>(&II)) {
+            FI->replaceAllUsesWith(FI->getOperand(0));
+            FI->dropAllReferences();
+            ToErase.push_back(FI);
+          }
+
+          // Remove metadata not supported by SPIRV
+          static const char *MDs[] = {
+              "fpmath",
+              "tbaa",
+              "range",
+          };
+          for (auto &MDName : MDs) {
+            if (II.getMetadata(MDName)) {
+              II.setMetadata(MDName, nullptr);
+            }
+          }
+          // Add an additional bitcast in case address space cast also changes
+          // pointer element type.
+          if (auto *ASCast = dyn_cast<AddrSpaceCastInst>(&II)) {
+            Type *DestTy = ASCast->getDestTy();
+            Type *SrcTy = ASCast->getSrcTy();
+            if (DestTy->getPointerElementType() !=
+                SrcTy->getPointerElementType()) {
+              PointerType *InterTy =
+                  PointerType::get(DestTy->getPointerElementType(),
+                                   SrcTy->getPointerAddressSpace());
+              BitCastInst *NewBCast = new BitCastInst(
+                  ASCast->getPointerOperand(), InterTy, /*NameStr=*/"", ASCast);
+              AddrSpaceCastInst *NewASCast = new AddrSpaceCastInst(
+                  NewBCast, DestTy, /*NameStr=*/"", ASCast);
+              ToErase.push_back(ASCast);
+              ASCast->dropAllReferences();
+              ASCast->replaceAllUsesWith(NewASCast);
+            }
+          }
+          if (auto Cmpxchg = dyn_cast<AtomicCmpXchgInst>(&II)) {
+            // Transform:
+            // %1 = cmpxchg i32* %ptr, i32 %comparator, i32 %0 seq_cst acquire
+            // To:
+            // %cmpxchg.res = call spir_func
+            //   i32 @_Z29__spirv_AtomicCompareExchangePiiiiii(
+            //   i32* %ptr, i32 1, i32 16, i32 2, i32 %0, i32 %comparator)
+            // %cmpxchg.success = icmp eq i32 %cmpxchg.res, %comparator
+            // %1 = insertvalue { i32, i1 } undef, i32 %cmpxchg.res, 0
+            // %2 = insertvalue { i32, i1 } %1, i1 %cmpxchg.success, 1
+
+            // To get memory scope argument we might use
+            // Cmpxchg->getSyncScopeID() but LLVM's cmpxchg instruction is not
+            // aware of OpenCL(or SPIR-V) memory scope enumeration. And assuming
+            // the produced SPIR-V module will be consumed in an OpenCL
+            // environment, we can use the same memory scope as OpenCL atomic
+            // functions that do not have memory_scope argument, i.e.
+            // memory_scope_device. See the OpenCL C specification p6.13.11.
+            // Atomic Functions
+
+            // cmpxchg LLVM instruction returns a pair {i32, i1}: the original
+            // value and a flag indicating success (true) or failure (false).
+            // OpAtomicCompareExchange SPIR-V instruction returns only the
+            // original value. To keep the return type({i32, i1}) we construct
+            // a composite. The first element of the composite holds result of
+            // OpAtomicCompareExchange, i.e. the original value. The second
+            // element holds result of comparison of the returned value and the
+            // comparator, which matches with semantics of the flag returned by
+            // cmpxchg.
+            Value *Ptr = Cmpxchg->getPointerOperand();
+            Value *MemoryScope = getInt32(M, spv::ScopeDevice);
+            auto SuccessOrder = static_cast<OCLMemOrderKind>(
+                llvm::toCABI(Cmpxchg->getSuccessOrdering()));
+            auto FailureOrder = static_cast<OCLMemOrderKind>(
+                llvm::toCABI(Cmpxchg->getFailureOrdering()));
+            Value *EqualSem = getInt32(M, OCLMemOrderMap::map(SuccessOrder));
+            Value *UnequalSem = getInt32(M, OCLMemOrderMap::map(FailureOrder));
+            Value *Val = Cmpxchg->getNewValOperand();
+            Value *Comparator = Cmpxchg->getCompareOperand();
+
+            llvm::Value *Args[] = {Ptr,        MemoryScope, EqualSem,
+                                   UnequalSem, Val,         Comparator};
+            auto *Res =
+                addCallInstSPIRV(M, "__spirv_AtomicCompareExchange",
+                                 Cmpxchg->getCompareOperand()->getType(), Args,
+                                 nullptr, &II, "cmpxchg.res");
+            IRBuilder<> Builder(Cmpxchg);
+            auto *Cmp =
+                Builder.CreateICmpEQ(Res, Comparator, "cmpxchg.success");
+            auto *V1 = Builder.CreateInsertValue(
+                UndefValue::get(Cmpxchg->getType()), Res, 0);
+            auto *V2 =
+                Builder.CreateInsertValue(V1, Cmp, 1, Cmpxchg->getName());
+            Cmpxchg->replaceAllUsesWith(V2);
+            ToErase.push_back(Cmpxchg);
           }
         }
-
-        // Remove optimization info not supported by SPIRV
-        if (auto BO = dyn_cast<BinaryOperator>(&II)) {
-          if (isa<PossiblyExactOperator>(BO) && BO->isExact())
-            BO->setIsExact(false);
-        }
-
-        // ref: https://github.com/KhronosGroup/SPIRV-LLVM-Translator/issues/1140
-        // FIXME: This is not valid handling for freeze instruction
-        if (auto FI = dyn_cast<FreezeInst>(&II)) {
-          FI->replaceAllUsesWith(FI->getOperand(0));
-          FI->dropAllReferences();
-          ToErase.push_back(FI);
-        }
-
-        // Remove metadata not supported by SPIRV
-        static const char *MDs[] = {
-            "fpmath",
-            "tbaa",
-            "range",
-        };
-        for (auto &MDName : MDs) {
-          if (II.getMetadata(MDName)) {
-            II.setMetadata(MDName, nullptr);
-          }
-        }
-        // Add an additional bitcast in case address space cast also changes
-        // pointer element type.
-        if (auto *ASCast = dyn_cast<AddrSpaceCastInst>(&II)) {
-          Type *DestTy = ASCast->getDestTy();
-          Type *SrcTy = ASCast->getSrcTy();
-          if (DestTy->getPointerElementType() !=
-              SrcTy->getPointerElementType()) {
-            PointerType *InterTy =
-                PointerType::get(DestTy->getPointerElementType(),
-                                 SrcTy->getPointerAddressSpace());
-            BitCastInst *NewBCast = new BitCastInst(
-                ASCast->getPointerOperand(), InterTy, /*NameStr=*/"", ASCast);
-            AddrSpaceCastInst *NewASCast =
-                new AddrSpaceCastInst(NewBCast, DestTy, /*NameStr=*/"", ASCast);
-            ToErase.push_back(ASCast);
-            ASCast->dropAllReferences();
-            ASCast->replaceAllUsesWith(NewASCast);
-          }
-        }
-        if (auto Cmpxchg = dyn_cast<AtomicCmpXchgInst>(&II)) {
-          // Transform:
-          // %1 = cmpxchg i32* %ptr, i32 %comparator, i32 %0 seq_cst acquire
-          // To:
-          // %cmpxchg.res = call spir_func
-          //   i32 @_Z29__spirv_AtomicCompareExchangePiiiiii(
-          //   i32* %ptr, i32 1, i32 16, i32 2, i32 %0, i32 %comparator)
-          // %cmpxchg.success = icmp eq i32 %cmpxchg.res, %comparator
-          // %1 = insertvalue { i32, i1 } undef, i32 %cmpxchg.res, 0
-          // %2 = insertvalue { i32, i1 } %1, i1 %cmpxchg.success, 1
-
-          // To get memory scope argument we might use Cmpxchg->getSyncScopeID()
-          // but LLVM's cmpxchg instruction is not aware of OpenCL(or SPIR-V)
-          // memory scope enumeration. And assuming the produced SPIR-V module
-          // will be consumed in an OpenCL environment, we can use the same
-          // memory scope as OpenCL atomic functions that do not have
-          // memory_scope argument, i.e. memory_scope_device. See the OpenCL C
-          // specification p6.13.11. Atomic Functions
-
-          // cmpxchg LLVM instruction returns a pair {i32, i1}: the original
-          // value and a flag indicating success (true) or failure (false).
-          // OpAtomicCompareExchange SPIR-V instruction returns only the
-          // original value. To keep the return type({i32, i1}) we construct
-          // a composite. The first element of the composite holds result of
-          // OpAtomicCompareExchange, i.e. the original value. The second
-          // element holds result of comparison of the returned value and the
-          // comparator, which matches with semantics of the flag returned by
-          // cmpxchg.
-          Value *Ptr = Cmpxchg->getPointerOperand();
-          Value *MemoryScope = getInt32(M, spv::ScopeDevice);
-          auto SuccessOrder = static_cast<OCLMemOrderKind>(
-              llvm::toCABI(Cmpxchg->getSuccessOrdering()));
-          auto FailureOrder = static_cast<OCLMemOrderKind>(
-              llvm::toCABI(Cmpxchg->getFailureOrdering()));
-          Value *EqualSem = getInt32(M, OCLMemOrderMap::map(SuccessOrder));
-          Value *UnequalSem = getInt32(M, OCLMemOrderMap::map(FailureOrder));
-          Value *Val = Cmpxchg->getNewValOperand();
-          Value *Comparator = Cmpxchg->getCompareOperand();
-
-          llvm::Value *Args[] = {Ptr,        MemoryScope, EqualSem,
-                                 UnequalSem, Val,         Comparator};
-          auto *Res = addCallInstSPIRV(M, "__spirv_AtomicCompareExchange",
-                                       Cmpxchg->getCompareOperand()->getType(),
-                                       Args, nullptr, &II, "cmpxchg.res");
-          IRBuilder<> Builder(Cmpxchg);
-          auto *Cmp = Builder.CreateICmpEQ(Res, Comparator, "cmpxchg.success");
-          auto *V1 = Builder.CreateInsertValue(
-              UndefValue::get(Cmpxchg->getType()), Res, 0);
-          auto *V2 = Builder.CreateInsertValue(V1, Cmp, 1, Cmpxchg->getName());
-          Cmpxchg->replaceAllUsesWith(V2);
-          ToErase.push_back(Cmpxchg);
-        }
-      }
+      } while (restart_bb);
     }
     for (Instruction *V : ToErase) {
       assert(V->user_empty());
