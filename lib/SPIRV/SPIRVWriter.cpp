@@ -1971,7 +1971,8 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
     }
     if (ST->getMetadata(LLVMContext::MD_nontemporal))
       MemoryAccess[0] |= MemoryAccessNontemporalMask;
-#if 0 // NOTE: disabled for now due to performance hit -> TODO: only enable where needed
+#if 0 // NOTE: disabled for now due to performance hit -> TODO: only enable
+      // where needed
     // always mark global/device pointer with "MakePointerAvailable"
     if (auto addr_space = ST->getPointerAddressSpace();
         SrcLang == spv::SourceLanguageGLSL &&
@@ -2045,7 +2046,8 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
     }
     if (LD->getMetadata(LLVMContext::MD_nontemporal))
       MemoryAccess[0] |= MemoryAccessNontemporalMask;
-#if 0 // NOTE: disabled for now due to performance hit -> TODO: only enable where needed
+#if 0 // NOTE: disabled for now due to performance hit -> TODO: only enable
+      // where needed
     // always mark pointers with "MakePointerVisible"
     if (auto addr_space = LD->getPointerAddressSpace();
         SrcLang == spv::SourceLanguageGLSL &&
@@ -5732,9 +5734,12 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
     BM->addExtension(ExtensionID::SPV_KHR_maximal_reconvergence);
     BF->addExecutionMode(
         new SPIRVExecutionMode(BF, ExecutionModeMaximallyReconvergesKHR));
-    BM->addExtension(ExtensionID::SPV_KHR_subgroup_uniform_control_flow);
-    BF->addExecutionMode(
-        new SPIRVExecutionMode(BF, ExecutionModeSubgroupUniformControlFlowKHR));
+
+    if (M->getNamedMetadata("floor.vulkan_subgroup_uniform_cf")) {
+      BM->addExtension(ExtensionID::SPV_KHR_subgroup_uniform_control_flow);
+      BF->addExecutionMode(new SPIRVExecutionMode(
+          BF, ExecutionModeSubgroupUniformControlFlowKHR));
+    }
 
     const std::string func_name = F->getName().str();
     std::vector<std::string> md_data_input, md_data_output;
@@ -5987,28 +5992,27 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
     uint32_t desc_set = 0;
     uint32_t arg_buffer_desc_set_offset = 0;
     uint32_t arg_buffer_desc_set = 0;
+    const auto low_dsc =
+        M->getNamedMetadata("floor.vulkan_low_descriptor_set_count");
     switch (stage) { // put each stage into a different set
     case VULKAN_STAGE::KERNEL:
       desc_set = 1;
-      arg_buffer_desc_set_offset = 2; // [2, 15]
+      arg_buffer_desc_set_offset = 2; // [2, 15] or [2, 6]
       break;
     case VULKAN_STAGE::VERTEX:
+    case VULKAN_STAGE::TESSELLATION_EVALUATION:
       desc_set = 1;
-      arg_buffer_desc_set_offset = 5; // [5, 8]
+      arg_buffer_desc_set_offset = 3; // [3, 8] or [3, 4]
       break;
     case VULKAN_STAGE::FRAGMENT:
       desc_set = 2;
-      arg_buffer_desc_set_offset = 9; // [9, 12]
+      arg_buffer_desc_set_offset = (!low_dsc ? 9 : 5); // [9, 14] or [5, 6]
+      break;
+    case VULKAN_STAGE::TESSELLATION_CONTROL:
+      desc_set = 1;                     // reuse same descriptor set
+      arg_buffer_desc_set_offset = ~0u; // not supported here
       break;
     case VULKAN_STAGE::GEOMETRY:
-    case VULKAN_STAGE::TESSELLATION_CONTROL:
-      // will never support geometry shaders + tessellation at the same time
-      desc_set = 3;
-      arg_buffer_desc_set_offset = 13; // [13, 15]
-      break;
-    case VULKAN_STAGE::TESSELLATION_EVALUATION:
-      desc_set = 4;
-      break;
     default:
       llvm_unreachable("invalid stage");
     }
@@ -6049,7 +6053,7 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
         const auto arg_buf_idx = std::stoull(arg_buf_idx_str);
 
         // handle argument buffer index
-        assert(arg_buf_idx + arg_buffer_desc_set_offset < 16);
+        assert(arg_buf_idx + arg_buffer_desc_set_offset < (low_dsc ? 7 : 16));
         const auto this_arg_buffer_desc_set =
             arg_buf_idx + arg_buffer_desc_set_offset;
         if (arg_buffer_desc_set != this_arg_buffer_desc_set) {
