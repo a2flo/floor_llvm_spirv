@@ -60,12 +60,12 @@
 namespace std {
 template <>
 struct hash<pair<SPIRV::SPIRVType *, uint32_t>> : public hash<size_t> {
-  size_t operator()(const pair<SPIRV::SPIRVType *, uint32_t> &value) const
-      noexcept {
+  size_t
+  operator()(const pair<SPIRV::SPIRVType *, uint32_t> &value) const noexcept {
     return (hash<uint32_t>()(value.second) ^ hash<void *>()(value.first));
   }
 };
-}
+} // namespace std
 
 namespace SPIRV {
 
@@ -138,7 +138,8 @@ public:
   std::vector<SPIRVType *>
   getValueTypes(const std::vector<SPIRVId> &) const override;
   SPIRVMemoryModelKind getMemoryModel() const override { return MemoryModel; }
-  SPIRVConstant *getLiteralAsConstant(unsigned Literal, bool is_signed) override;
+  SPIRVConstant *getLiteralAsConstant(unsigned Literal,
+                                      bool is_signed) override;
   SPIRVConstant *getLiteralAsConstant(float Literal) override;
   SPIRVConstant *getLiteralAsConstant(double Literal) override;
   unsigned getNumEntryPoints(SPIRVExecutionModelKind EM) const override {
@@ -314,7 +315,9 @@ public:
   SPIRVValue *addSpecDoubleConstant(SPIRVTypeFloat *, double) override;
   SPIRVValue *addSpecFloatConstant(SPIRVTypeFloat *, float) override;
   SPIRVValue *addSpecIntegerConstant(SPIRVTypeInt *, uint64_t) override;
-  SPIRVValue *addSpecCompositeConstant(SPIRVType *, const std::vector<SPIRVValue *> &) override;
+  SPIRVValue *
+  addSpecCompositeConstant(SPIRVType *,
+                           const std::vector<SPIRVValue *> &) override;
 
   // Instruction creation functions
   SPIRVInstruction *addPtrAccessChainInst(SPIRVType *, SPIRVValue *,
@@ -393,6 +396,9 @@ public:
   addGroupNonUniformShuffleInst(Op OpCode, spv::Scope scope, SPIRVValue *val,
                                 SPIRVValue *lane_idx_delta_or_mask,
                                 SPIRVBasicBlock *BB) override;
+  SPIRVInstruction *addGroupNonUniformBallotInst(Op OpCode, spv::Scope scope,
+                                                 SPIRVValue *predicate,
+                                                 SPIRVBasicBlock *BB) override;
   SPIRVInstruction *
   addInstruction(SPIRVInstruction *Inst, SPIRVBasicBlock *BB,
                  SPIRVInstruction *InsertBefore = nullptr) override;
@@ -487,8 +493,8 @@ public:
                                       SPIRVBasicBlock *BB) override;
   SPIRVInstruction *addBitCountInst(SPIRVType *ret_type, SPIRVValue *p,
                                     SPIRVBasicBlock *BB) override;
-  SPIRVInstruction *
-  addBitReverseInst(SPIRVType *ret_type, SPIRVValue *p, SPIRVBasicBlock *BB) override;
+  SPIRVInstruction *addBitReverseInst(SPIRVType *ret_type, SPIRVValue *p,
+                                      SPIRVBasicBlock *BB) override;
 
   // other ext functions
   SPIRVInstruction *addFPGARegINTELInst(SPIRVType *, SPIRVValue *,
@@ -973,7 +979,8 @@ SPIRVTypeBool *SPIRVModuleImpl::addBoolType() {
   return addType(BoolType);
 }
 
-SPIRVTypeInt *SPIRVModuleImpl::addIntegerType(unsigned BitWidth, bool is_signed) {
+SPIRVTypeInt *SPIRVModuleImpl::addIntegerType(unsigned BitWidth,
+                                              bool is_signed) {
   if (!is_signed) {
     auto Loc = IntTypeMap.find(BitWidth);
     if (Loc != IntTypeMap.end())
@@ -1094,7 +1101,9 @@ SPIRVModuleImpl::addImageType(SPIRVType *SampledType,
 
   // doesn't exist yet, create it
   image_type_info info{
-      .sampled_type = SampledType, .desc = Desc, .access = Acc,
+      .sampled_type = SampledType,
+      .desc = Desc,
+      .access = Acc,
   };
   if (Acc != spv::AccessQualifierNone) {
     info.image_type = addType(new SPIRVTypeImage(
@@ -1267,7 +1276,8 @@ SPIRVValue *SPIRVModuleImpl::addIntegerConstant(SPIRVTypeInt *Ty, uint64_t V) {
     assert(I32 == V && "Integer value truncated");
     return getLiteralAsConstant(I32, Ty->isSigned());
   }
-  // for signed constants of bit-width 8 and 16, ensure upper bits are set if they are supposed to be negative
+  // for signed constants of bit-width 8 and 16, ensure upper bits are set if
+  // they are supposed to be negative
   if (Ty->isSigned()) {
     if (bit_width == 8 && V > 127) {
       V |= 0xFFFF'FFFF'FFFF'FF00ull;
@@ -1573,6 +1583,20 @@ SPIRVInstruction *SPIRVModuleImpl::addGroupNonUniformShuffleInst(
         new SPIRVGroupNonUniformShuffleDown(getId(), scope_id, val,
                                             lane_idx_delta_or_mask, BB),
         BB);
+  default:
+    llvm_unreachable("invalid group-non-uniform opcode");
+  }
+}
+
+SPIRVInstruction *SPIRVModuleImpl::addGroupNonUniformBallotInst(
+    Op OpCode, spv::Scope scope, SPIRVValue *predicate, SPIRVBasicBlock *BB) {
+  const auto scope_id = getLiteralAsConstant(scope, true);
+  switch (OpCode) {
+  case spv::OpGroupNonUniformBallot:
+    return addInstruction(new SPIRVGroupNonUniformBallot(
+                              addVectorType(addIntegerType(32u, false), 4u),
+                              getId(), scope_id, predicate, BB),
+                          BB);
   default:
     llvm_unreachable("invalid group-non-uniform opcode");
   }
@@ -2019,8 +2043,9 @@ SPIRVInstruction *SPIRVModuleImpl::addExpectKHRInst(SPIRVType *ResultTy,
 // Create AliasDomainDeclINTEL/AliasScopeDeclINTEL/AliasScopeListDeclINTEL
 // instructions
 template <typename AliasingInstType>
-SPIRVEntry *SPIRVModuleImpl::getOrAddMemAliasingINTELInst(
-    std::vector<SPIRVId> Args, llvm::MDNode *MD) {
+SPIRVEntry *
+SPIRVModuleImpl::getOrAddMemAliasingINTELInst(std::vector<SPIRVId> Args,
+                                              llvm::MDNode *MD) {
   assert(MD && "noalias/alias.scope metadata can't be null");
   // Don't duplicate aliasing instruction. For that use a map with a MDNode key
   if (AliasInstMDMap.find(MD) != AliasInstMDMap.end())
@@ -2031,20 +2056,23 @@ SPIRVEntry *SPIRVModuleImpl::getOrAddMemAliasingINTELInst(
 }
 
 // Create AliasDomainDeclINTEL instruction
-SPIRVEntry *SPIRVModuleImpl::getOrAddAliasDomainDeclINTELInst(
-    std::vector<SPIRVId> Args, llvm::MDNode *MD) {
+SPIRVEntry *
+SPIRVModuleImpl::getOrAddAliasDomainDeclINTELInst(std::vector<SPIRVId> Args,
+                                                  llvm::MDNode *MD) {
   return getOrAddMemAliasingINTELInst<SPIRVAliasDomainDeclINTEL>(Args, MD);
 }
 
 // Create AliasScopeDeclINTEL instruction
-SPIRVEntry *SPIRVModuleImpl::getOrAddAliasScopeDeclINTELInst(
-    std::vector<SPIRVId> Args, llvm::MDNode *MD) {
+SPIRVEntry *
+SPIRVModuleImpl::getOrAddAliasScopeDeclINTELInst(std::vector<SPIRVId> Args,
+                                                 llvm::MDNode *MD) {
   return getOrAddMemAliasingINTELInst<SPIRVAliasScopeDeclINTEL>(Args, MD);
 }
 
 // Create AliasScopeListDeclINTEL instruction
-SPIRVEntry *SPIRVModuleImpl::getOrAddAliasScopeListDeclINTELInst(
-    std::vector<SPIRVId> Args, llvm::MDNode *MD) {
+SPIRVEntry *
+SPIRVModuleImpl::getOrAddAliasScopeListDeclINTELInst(std::vector<SPIRVId> Args,
+                                                     llvm::MDNode *MD) {
   return getOrAddMemAliasingINTELInst<SPIRVAliasScopeListDeclINTEL>(Args, MD);
 }
 
@@ -2056,7 +2084,7 @@ SPIRVInstruction *SPIRVModuleImpl::addVariable(
                                               StorageClass, BB, this);
   if (BB) {
     // ensure variables are always added at the front
-    SPIRVInstruction* insert_before = nullptr;
+    SPIRVInstruction *insert_before = nullptr;
     if (BB->getNumInst() > 0) {
       insert_before = BB->getInst(0);
     }
@@ -2291,18 +2319,19 @@ spv_ostream &operator<<(spv_ostream &O, SPIRVModule &M) {
   for (auto &I : MI.EntryPointVec) {
     for (auto &II : I.second) {
       if (MI.getSourceLanguage(nullptr) != spv::SourceLanguageGLSL) {
-        O << SPIRVEntryPoint(&M, I.first, II, M.get<SPIRVFunction>(II)->getName(),
+        O << SPIRVEntryPoint(&M, I.first, II,
+                             M.get<SPIRVFunction>(II)->getName(),
                              M.get<SPIRVFunction>(II)->getVariables());
       } else {
         std::vector<SPIRVId> io_vars;
         const auto ep_iter = MI.getEntryPointIO().find(II);
         if (ep_iter != MI.getEntryPointIO().end()) {
-          for (const auto& var : ep_iter->second) {
+          for (const auto &var : ep_iter->second) {
             io_vars.emplace_back(var->getId());
           }
         }
-        O << SPIRVEntryPoint(&M, I.first, II, M.get<SPIRVFunction>(II)->getName(),
-                             io_vars);
+        O << SPIRVEntryPoint(&M, I.first, II,
+                             M.get<SPIRVFunction>(II)->getName(), io_vars);
       }
     }
   }
@@ -2337,7 +2366,7 @@ spv_ostream &operator<<(spv_ostream &O, SPIRVModule &M) {
   }
 
   if (M.isAllowedToUseExtension(
-        ExtensionID::SPV_INTEL_memory_access_aliasing)) {
+          ExtensionID::SPV_INTEL_memory_access_aliasing)) {
     O << SPIRVNL() << MI.AliasInstMDVec;
   }
 

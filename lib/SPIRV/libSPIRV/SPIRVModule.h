@@ -395,6 +395,9 @@ public:
                                 SPIRVValue *lane_idx_delta_or_mask,
                                 SPIRVBasicBlock *BB) = 0;
   virtual SPIRVInstruction *
+  addGroupNonUniformBallotInst(Op OpCode, spv::Scope scope,
+                               SPIRVValue *predicate, SPIRVBasicBlock *BB) = 0;
+  virtual SPIRVInstruction *
   addInstruction(SPIRVInstruction *Inst, SPIRVBasicBlock *BB,
                  SPIRVInstruction *InsertBefore = nullptr) = 0;
   virtual SPIRVInstTemplateBase *addInstTemplate(Op OC, SPIRVBasicBlock *BB,
@@ -491,12 +494,14 @@ public:
   virtual SPIRVInstruction *addSampledImageInst(SPIRVType *, SPIRVValue *,
                                                 SPIRVValue *,
                                                 SPIRVBasicBlock *) = 0;
-  virtual SPIRVEntry *getOrAddAliasDomainDeclINTELInst(
-      std::vector<SPIRVId> Args, llvm::MDNode *MD) = 0;
-  virtual SPIRVEntry *getOrAddAliasScopeDeclINTELInst(
-      std::vector<SPIRVId> Args, llvm::MDNode *MD) = 0;
-  virtual SPIRVEntry *getOrAddAliasScopeListDeclINTELInst(
-      std::vector<SPIRVId> Args, llvm::MDNode *MD) = 0;
+  virtual SPIRVEntry *
+  getOrAddAliasDomainDeclINTELInst(std::vector<SPIRVId> Args,
+                                   llvm::MDNode *MD) = 0;
+  virtual SPIRVEntry *getOrAddAliasScopeDeclINTELInst(std::vector<SPIRVId> Args,
+                                                      llvm::MDNode *MD) = 0;
+  virtual SPIRVEntry *
+  getOrAddAliasScopeListDeclINTELInst(std::vector<SPIRVId> Args,
+                                      llvm::MDNode *MD) = 0;
   virtual SPIRVInstruction *addAssumeTrueKHRInst(SPIRVValue *Condition,
                                                  SPIRVBasicBlock *BB) = 0;
   virtual SPIRVInstruction *addExpectKHRInst(SPIRVType *ResultTy,

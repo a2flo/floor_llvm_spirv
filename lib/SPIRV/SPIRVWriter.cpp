@@ -4167,6 +4167,36 @@ SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_simd_shuffle(
                                            spv_lane_idx_delta_or_mask, BB);
 }
 
+SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_simd_ballot(
+    StringRef MangledName, CallInst *CI, SPIRVBasicBlock *BB) {
+  if (CI->getNumOperands() < 1) {
+    assert(false &&
+           "invalid amount of operands in libfloor sub-group simd-ballot");
+    return nullptr;
+  }
+
+  // get ballot type
+  Op opcode = spv::OpNop;
+  if (MangledName.consume_front(
+          "simd_ballot.ballot") /* must be the last check */) {
+    opcode = spv::OpGroupNonUniformBallot;
+  } else {
+    assert(false && "invalid sub-group simd-ballot");
+    return nullptr;
+  }
+
+  // translate value and handle type
+  auto predicate_value = CI->getOperand(0);
+  auto spv_predicate_value = transValue(predicate_value, BB);
+  if (!spv_predicate_value->getType()->isTypeBool()) {
+    assert(false && "invalid sub-group simd-ballot predicate type");
+    return nullptr;
+  }
+
+  return BM->addGroupNonUniformBallotInst(opcode, spv::ScopeSubgroup,
+                                          spv_predicate_value, BB);
+}
+
 SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_op(StringRef MangledName,
                                                        CallInst *CI,
                                                        SPIRVBasicBlock *BB) {
@@ -4178,6 +4208,8 @@ SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_op(StringRef MangledName,
   // extract algorithm
   if (MangledName.startswith("simd_shuffle")) {
     return add_libfloor_sub_group_simd_shuffle(MangledName, CI, BB);
+  } else if (MangledName.startswith("simd_ballot")) {
+    return add_libfloor_sub_group_simd_ballot(MangledName, CI, BB);
   }
 
   if (CI->getNumOperands() == 0) {

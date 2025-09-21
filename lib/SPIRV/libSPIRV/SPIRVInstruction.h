@@ -156,15 +156,16 @@ public:
   }
   bool isTerminationInstruction() const {
     switch (OpCode) {
-      case OpBranch:
-      case OpBranchConditional:
-      case OpSwitch:
-      case OpReturn:
-      case OpReturnValue:
-      case OpKill:
-      case OpUnreachable:
-        return true;
-      default: break;
+    case OpBranch:
+    case OpBranchConditional:
+    case OpSwitch:
+    case OpReturn:
+    case OpReturnValue:
+    case OpKill:
+    case OpUnreachable:
+      return true;
+    default:
+      break;
     }
     return false;
   }
@@ -330,9 +331,7 @@ public:
     return Operands;
   }
 
-  virtual SPIRVValue *getOperand(unsigned I) {
-    return getOpValue(I);
-  }
+  virtual SPIRVValue *getOperand(unsigned I) { return getOpValue(I); }
 
   bool hasExecScope() const { return SPIRV::hasExecScope(OpCode); }
 
@@ -416,26 +415,27 @@ public:
     }
     if (MemoryAccess[0] & MemoryAccessMakePointerAvailableMask &&
         MemoryAccess[0] & MemoryAccessMakePointerVisibleMask) {
-      assert(false && "can't have both MakePointerAvailable and MakePointerVisible in the same memory access");
+      assert(false && "can't have both MakePointerAvailable and "
+                      "MakePointerVisible in the same memory access");
     }
     if (MemoryAccess[0] & MemoryAccessMakePointerAvailableMask) {
       assert(MemoryAccess.size() > MemAccessNumParam &&
-          "MakePointerAvailable scope operand is missing");
+             "MakePointerAvailable scope operand is missing");
       Scope = MemoryAccess[MemAccessNumParam++];
     }
     if (MemoryAccess[0] & MemoryAccessMakePointerVisibleMask) {
       assert(MemoryAccess.size() > MemAccessNumParam &&
-          "MakePointerVisible scope operand is missing");
+             "MakePointerVisible scope operand is missing");
       Scope = MemoryAccess[MemAccessNumParam++];
     }
     if (MemoryAccess[0] & internal::MemoryAccessAliasScopeINTELMask) {
       assert(MemoryAccess.size() > MemAccessNumParam &&
-          "Aliasing operand is missing");
+             "Aliasing operand is missing");
       AliasScopeInstID = MemoryAccess[MemAccessNumParam++];
     }
     if (MemoryAccess[0] & internal::MemoryAccessNoAliasINTELMask) {
       assert(MemoryAccess.size() > MemAccessNumParam &&
-          "Aliasing operand is missing");
+             "Aliasing operand is missing");
       NoAliasInstID = MemoryAccess[MemAccessNumParam];
     }
   }
@@ -1020,13 +1020,14 @@ public:
   static const Op OC = internal::OpUndefValueInternal;
   static const SPIRVWord FixedWordCount = 3;
 
-  SPIRVUndefValueInternal(SPIRVType *TheType, SPIRVId TheId, SPIRVBasicBlock *BB)
+  SPIRVUndefValueInternal(SPIRVType *TheType, SPIRVId TheId,
+                          SPIRVBasicBlock *BB)
       : SPIRVInstruction(3, OC, TheType, TheId, BB) {
     validate();
     assert(BB && "Invalid BB");
   }
   // Incomplete constructor
-	SPIRVUndefValueInternal() { validate(); }
+  SPIRVUndefValueInternal() { validate(); }
 
   _SPIRV_DEF_ENCDEC2(Type, Id)
 };
@@ -1853,7 +1854,8 @@ public:
     assert(Module && "Invalid module");
     ExtSetKind = Module->getBuiltinSet(ExtSetId);
     assert((ExtSetKind == SPIRVEIS_OpenCL || ExtSetKind == SPIRVEIS_Debug ||
-            ExtSetKind == SPIRVEIS_OpenCL_DebugInfo_100 || ExtSetKind == SPIRVEIS_GLSL) &&
+            ExtSetKind == SPIRVEIS_OpenCL_DebugInfo_100 ||
+            ExtSetKind == SPIRVEIS_GLSL) &&
            "not supported");
   }
   void encode(spv_ostream &O) const override {
@@ -2549,7 +2551,37 @@ _SPIRV_OP(GroupNonUniformAny, true, 5)
 _SPIRV_OP(GroupNonUniformAllEqual, true, 5)
 #undef _SPIRV_OP
 
-class SPIRVGroupNonUniformBallotInst : public SPIRVInstTemplateBase {
+class SPIRVGroupNonUniformBallot : public SPIRVInstruction {
+public:
+  const static Op OC = OpGroupNonUniformBallot;
+  // Complete constructor
+  SPIRVGroupNonUniformBallot(SPIRVType *TheType, SPIRVId TheId,
+                             SPIRVValue *scope_, SPIRVValue *predicate_,
+                             SPIRVBasicBlock *TheBB)
+      : SPIRVInstruction(5, OC, TheType, TheId, TheBB),
+        predicate(predicate_->getId()), scope(scope_->getId()) {
+    validate();
+    assert(TheBB && "Invalid BB");
+    Module->addCapability(CapabilityGroupNonUniformBallot);
+  }
+  // Incomplete constructor
+  SPIRVGroupNonUniformBallot()
+      : SPIRVInstruction(OC), predicate(SPIRVID_INVALID),
+        scope(SPIRVID_INVALID) {}
+
+  _SPIRV_DEF_ENCDEC4(Type, Id, scope, predicate)
+
+  SPIRVCapVec getRequiredCapability() const override {
+    return getVec(CapabilityGroupNonUniformBallot);
+  }
+
+protected:
+  void validate() const override { SPIRVInstruction::validate(); }
+  SPIRVId predicate;
+  SPIRVId scope;
+};
+
+class SPIRVGroupNonUniformBallotGenericInst : public SPIRVInstTemplateBase {
 public:
   SPIRVCapVec getRequiredCapability() const override {
     return getVec(CapabilityGroupNonUniformBallot);
@@ -2557,12 +2589,11 @@ public:
 };
 
 #define _SPIRV_OP(x, ...)                                                      \
-  typedef SPIRVInstTemplate<SPIRVGroupNonUniformBallotInst, Op##x,             \
+  typedef SPIRVInstTemplate<SPIRVGroupNonUniformBallotGenericInst, Op##x,      \
                             __VA_ARGS__>                                       \
       SPIRV##x;
 _SPIRV_OP(GroupNonUniformBroadcast, true, 6)
 _SPIRV_OP(GroupNonUniformBroadcastFirst, true, 5)
-_SPIRV_OP(GroupNonUniformBallot, true, 5)
 _SPIRV_OP(GroupNonUniformInverseBallot, true, 5)
 _SPIRV_OP(GroupNonUniformBallotBitExtract, true, 6)
 _SPIRV_OP(GroupNonUniformBallotBitCount, true, 6, false, 1)
