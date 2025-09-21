@@ -4115,17 +4115,23 @@ SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_simd_shuffle(
   auto lane_value = CI->getOperand(0);
   auto spv_lane_value = transValue(lane_value, BB);
   auto shuffle_op_type = spv_lane_value->getType();
+  const auto is_vector = shuffle_op_type->isTypeVector();
+  [[maybe_unused]] const auto has_vector_name =
+      (MangledName.contains("v2.") || MangledName.contains("v3.") ||
+       MangledName.contains("v4."));
+  assert((is_vector && has_vector_name) || (!is_vector && !has_vector_name));
 
   if (MangledName.endswith("s8") || MangledName.endswith("s16") ||
       MangledName.endswith("s32") || MangledName.endswith("s64") ||
       MangledName.endswith("u8") || MangledName.endswith("u16") ||
       MangledName.endswith("u32") || MangledName.endswith("u64")) {
-    if (!shuffle_op_type->isTypeInt()) {
+    if (!shuffle_op_type->isTypeInt() && !shuffle_op_type->isTypeVectorInt()) {
       assert(false && "expected integer type");
       return nullptr;
     }
   } else if (MangledName.endswith("f16") || MangledName.endswith("f32")) {
-    if (!shuffle_op_type->isTypeFloat()) {
+    if (!shuffle_op_type->isTypeFloat() &&
+        !shuffle_op_type->isTypeVectorFloat()) {
       assert(false && "expected float type");
       return nullptr;
     }
@@ -4209,14 +4215,23 @@ SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_op(StringRef MangledName,
   auto item_value = CI->getOperand(0);
   auto spv_item_value = transValue(item_value, BB);
   auto group_op_type = spv_item_value->getType();
+  const auto is_vector = group_op_type->isTypeVector();
+  [[maybe_unused]] const auto has_vector_name =
+      (MangledName.contains("v2.") || MangledName.contains("v3.") ||
+       MangledName.contains("v4."));
+  assert((is_vector && has_vector_name) || (!is_vector && !has_vector_name));
+  auto group_op_vec_type =
+      (is_vector ? (const SPIRVTypeVector *)group_op_type : nullptr);
 
   if (MangledName.endswith("s8") || MangledName.endswith("s16") ||
       MangledName.endswith("s32") || MangledName.endswith("s64")) {
-    if (!group_op_type->isTypeInt()) {
+    if (!group_op_type->isTypeInt() && !group_op_type->isTypeVectorInt()) {
       assert(false && "expected integer type");
       return nullptr;
     }
-    const auto int_type = (const SPIRVTypeInt *)group_op_type;
+    const auto int_type =
+        (is_vector ? (const SPIRVTypeInt *)group_op_vec_type->getComponentType()
+                   : (const SPIRVTypeInt *)group_op_type);
     const auto bit_width = int_type->getBitWidth();
     if (bit_width != 8 && bit_width != 16 && bit_width != 32 &&
         bit_width != 64) {
@@ -4225,19 +4240,26 @@ SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_op(StringRef MangledName,
     }
     // depending on the op, we may need to perform type conversion
     if (opcode != spv::OpGroupNonUniformIAdd && !int_type->isSigned()) {
-      spv_item_value = BM->addUnaryInst(spv::OpBitcast, int_type->getSigned(),
-                                        spv_item_value, BB);
+      auto signed_conv_type = int_type->getSigned();
+      auto conv_type = (is_vector ? (SPIRVType *)BM->addVectorType(
+                                        signed_conv_type,
+                                        group_op_vec_type->getComponentCount())
+                                  : (SPIRVType *)signed_conv_type);
+      spv_item_value =
+          BM->addUnaryInst(spv::OpBitcast, conv_type, spv_item_value, BB);
       group_op_type = spv_item_value->getType();
     }
 
     // NOTE: opcode is already correct here
   } else if (MangledName.endswith("u8") || MangledName.endswith("u16") ||
              MangledName.endswith("u32") || MangledName.endswith("u64")) {
-    if (!group_op_type->isTypeInt()) {
+    if (!group_op_type->isTypeInt() && !group_op_type->isTypeVectorInt()) {
       assert(false && "expected integer type");
       return nullptr;
     }
-    const auto int_type = (const SPIRVTypeInt *)group_op_type;
+    const auto int_type =
+        (is_vector ? (const SPIRVTypeInt *)group_op_vec_type->getComponentType()
+                   : (const SPIRVTypeInt *)group_op_type);
     const auto bit_width = int_type->getBitWidth();
     if (bit_width != 8 && bit_width != 16 && bit_width != 32 &&
         bit_width != 64) {
@@ -4247,8 +4269,13 @@ SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_op(StringRef MangledName,
     }
     // depending on the op, we may need to perform type conversion
     if (opcode != spv::OpGroupNonUniformIAdd && int_type->isSigned()) {
-      spv_item_value = BM->addUnaryInst(spv::OpBitcast, int_type->getUnsigned(),
-                                        spv_item_value, BB);
+      auto unsigned_conv_type = int_type->getUnsigned();
+      auto conv_type = (is_vector ? (SPIRVType *)BM->addVectorType(
+                                        unsigned_conv_type,
+                                        group_op_vec_type->getComponentCount())
+                                  : (SPIRVType *)unsigned_conv_type);
+      spv_item_value =
+          BM->addUnaryInst(spv::OpBitcast, conv_type, spv_item_value, BB);
       group_op_type = spv_item_value->getType();
     }
 
@@ -4266,12 +4293,15 @@ SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_op(StringRef MangledName,
       break;
     }
   } else if (MangledName.endswith("f16") || MangledName.endswith("f32")) {
-    if (!group_op_type->isTypeFloat()) {
+    if (!group_op_type->isTypeFloat() && !group_op_type->isTypeVectorFloat()) {
       assert(false && "expected float type");
       return nullptr;
     }
-    const auto bit_width =
-        ((const SPIRVTypeFloat *)group_op_type)->getBitWidth();
+    const auto fp_type =
+        (is_vector
+             ? (const SPIRVTypeFloat *)group_op_vec_type->getComponentType()
+             : (const SPIRVTypeFloat *)group_op_type);
+    const auto bit_width = fp_type->getBitWidth();
     if (bit_width != 16 && bit_width != 32) {
       assert(false &&
              "float sub-group ops only support 16-bit and 32-bit types");
