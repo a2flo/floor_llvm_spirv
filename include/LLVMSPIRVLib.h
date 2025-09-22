@@ -216,7 +216,7 @@ ModulePass *createPreprocessMetadataLegacy();
 
 /// Create and return a pass that writes the module to the specified
 /// ostream.
-ModulePass *createSPIRVWriterPass(std::ostream &Str);
+ModulePass *createSPIRVWriterPass(std::ostream &Str, const uint32_t spirv_version);
 
 /// Create and return a pass that writes the module to the specified
 /// ostream.

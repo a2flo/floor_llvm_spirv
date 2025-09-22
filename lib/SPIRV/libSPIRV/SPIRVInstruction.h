@@ -2562,7 +2562,6 @@ public:
         predicate(predicate_->getId()), scope(scope_->getId()) {
     validate();
     assert(TheBB && "Invalid BB");
-    Module->addCapability(CapabilityGroupNonUniformBallot);
   }
   // Incomplete constructor
   SPIRVGroupNonUniformBallot()
@@ -2573,6 +2572,9 @@ public:
 
   SPIRVCapVec getRequiredCapability() const override {
     return getVec(CapabilityGroupNonUniformBallot);
+  }
+  SPIRVWord getRequiredSPIRVVersion() const override {
+    return static_cast<SPIRVWord>(VersionNumber::SPIRV_1_3);
   }
 
 protected:

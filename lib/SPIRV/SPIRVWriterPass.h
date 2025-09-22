@@ -27,7 +27,7 @@ class PreservedAnalyses;
 /// \brief Create and return a pass that writes the module to the specified
 /// ostream. Note that this pass is designed for use with the legacy pass
 /// manager.
-ModulePass *createSPIRVWriterPass(raw_ostream &Str);
+ModulePass *createSPIRVWriterPass(raw_ostream &Str, const uint32_t spirv_version);
 
 /// \brief Create and return a pass that writes the module to the specified
 /// ostream. Note that this pass is designed for use with the legacy pass

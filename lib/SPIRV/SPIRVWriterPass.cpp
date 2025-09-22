@@ -48,8 +48,8 @@ public:
 
 char WriteSPIRVPass::ID = 0;
 
-ModulePass *llvm::createSPIRVWriterPass(raw_ostream &Str) {
-  SPIRV::TranslatorOpts DefaultOpts;
+ModulePass *llvm::createSPIRVWriterPass(raw_ostream &Str, const uint32_t spirv_version) {
+  SPIRV::TranslatorOpts DefaultOpts((SPIRV::VersionNumber)spirv_version);
 #if 0 // NOPE
   // To preserve old behavior of the translator, let's enable all extensions
   // by default in this API
