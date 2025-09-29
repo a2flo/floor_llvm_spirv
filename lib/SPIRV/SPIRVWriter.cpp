@@ -1180,9 +1180,21 @@ SPIRVInstruction *LLVMToSPIRVBase::transBinaryInst(BinaryOperator *B,
     break;
   }
 
+  // bitcast rhs value to lhs value type if integer signedness mismatch
+  auto Op1 = transValue(B->getOperand(1), BB);
+  auto rhs_type = Op1->getType();
+  const auto is_rhs_int = rhs_type->isTypeInt();
+  const auto is_rhs_sint =
+      (is_rhs_int ? ((SPIRVTypeInt *)rhs_type)->isSigned() : false);
+  const auto is_rhs_uint =
+      (is_rhs_int ? !((SPIRVTypeInt *)rhs_type)->isSigned() : false);
+  if (is_int && is_rhs_int &&
+      ((is_sint && !is_rhs_sint) || (is_uint && !is_rhs_uint))) {
+    Op1 = BM->addUnaryInst(spv::OpBitcast, type, Op1, BB);
+  }
+
   SPIRVInstruction *BI =
-      BM->addBinaryInst(transBoolOpCode(Op0, BOC), type, Op0,
-                        transValue(B->getOperand(1), BB), BB);
+      BM->addBinaryInst(transBoolOpCode(Op0, BOC), type, Op0, Op1, BB);
 
 #if 0 // this is stupid
   if (isUnfusedMulAdd(B)) {
