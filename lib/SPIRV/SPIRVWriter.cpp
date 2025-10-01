@@ -1151,7 +1151,33 @@ SPIRVInstruction *LLVMToSPIRVBase::transBinaryInst(BinaryOperator *B,
 
   // take care of signed/unsigned type conversion mismatches,
   // TODO: as with unary instructions, we need to do this properly at some point
-  const auto type = transType(B->getType());
+  const auto binary_op_type = transType(B->getType());
+  const auto lhs_type = Op0->getType();
+  SPIRVType *type = binary_op_type;
+  // assume the lhs type if there is an integer type mismatch
+  if (binary_op_type != lhs_type) {
+    if (lhs_type->isTypeInt() && binary_op_type->isTypeInt()) {
+      assert(((SPIRVTypeInt *)lhs_type)->isSigned() !=
+             ((SPIRVTypeInt *)binary_op_type)->isSigned());
+      assert(((SPIRVTypeInt *)lhs_type)->getBitWidth() ==
+             ((SPIRVTypeInt *)binary_op_type)->getBitWidth());
+      type = lhs_type;
+    } else if (lhs_type->isTypeVectorInt() &&
+               binary_op_type->isTypeVectorInt()) {
+      [[maybe_unused]] const auto lhs_vec_type = (SPIRVTypeVector *)lhs_type;
+      [[maybe_unused]] const auto bin_vec_type =
+          (SPIRVTypeVector *)binary_op_type;
+      assert(lhs_vec_type->getComponentCount() ==
+             bin_vec_type->getComponentCount());
+      [[maybe_unused]] const auto lhs_int_type =
+          (SPIRVTypeInt *)lhs_vec_type->getVectorComponentType();
+      [[maybe_unused]] const auto bin_int_type =
+          (SPIRVTypeInt *)binary_op_type->getVectorComponentType();
+      assert(lhs_int_type->isSigned() != bin_int_type->isSigned());
+      assert(lhs_int_type->getBitWidth() == bin_int_type->getBitWidth());
+      type = lhs_type;
+    }
+  }
   const auto is_int = type->isTypeInt();
   const auto is_sint = (is_int ? ((SPIRVTypeInt *)type)->isSigned() : false);
   const auto is_uint = (is_int ? !((SPIRVTypeInt *)type)->isSigned() : false);
