@@ -1732,6 +1732,7 @@ std::vector<SPIRVValue *> LLVMToSPIRVBase::translate_indices(
     const SPIRVStorageClassKind storage_class) {
   std::vector<SPIRVValue *> indices;
   for (auto &llvm_idx : llvm_indices) {
+#if 1
     if (auto const_idx = dyn_cast_or_null<ConstantInt>(llvm_idx); const_idx) {
       // preempt const index translation: this ensures these indices are
       // unsigned and have a correct bitness
@@ -1741,8 +1742,10 @@ std::vector<SPIRVValue *> LLVMToSPIRVBase::translate_indices(
           const_val));
       continue;
     }
+#endif
 
     auto idx = transValue(llvm_idx, BB);
+#if 1
     if (SrcLang == spv::SourceLanguageGLSL) {
       // for Vulkan: since signed integers are the default int type and values
       // may be signed, even when originating from a uint, we must ensure that
@@ -1768,6 +1771,7 @@ std::vector<SPIRVValue *> LLVMToSPIRVBase::translate_indices(
         }
       }
     }
+#endif
     indices.push_back(idx);
   }
   return indices;
@@ -2467,11 +2471,13 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
                                                    TransPointerOperand, Indices,
                                                    BB, GEP->isInBounds()));
     } else {
+      const auto needs_ptr_access_chain = !isa<GlobalValue>(PointerOperand);
       // with variable pointers we can now use PtrAccessChain instead of the
       // simple AccessChain (for SSBOs, local memory and physical SSBOs)
-      if (storage_class == spv::StorageClassWorkgroup ||
-          storage_class == spv::StorageClassPhysicalStorageBuffer ||
-          storage_class == spv::StorageClassStorageBuffer) {
+      if (needs_ptr_access_chain &&
+          (storage_class == spv::StorageClassWorkgroup ||
+           storage_class == spv::StorageClassPhysicalStorageBuffer ||
+           storage_class == spv::StorageClassStorageBuffer)) {
         // must still treat access to SSBO runtime arrays specially by adding
         // two additional 0 indices
         if (storage_class == spv::StorageClassStorageBuffer) {
@@ -5388,7 +5394,8 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
           enclosing_type->addMemberDecorate(0, spv::DecorationOffset, 0);
           auto array_stride = M->getDataLayout().getTypeStoreSize(elem_type);
           add_array_stride_decoration(rtarr_type, array_stride);
-          add_array_stride_decoration(mapped_type, array_stride);
+          // TODO: incorrect?
+          // add_array_stride_decoration(mapped_type, array_stride);
         } else {
           // we need to use the storage buffer storage class
           assert(elem_type->isStructTy() && "SSBO must be a struct");
@@ -5397,8 +5404,9 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
           mapped_type = transType(ssbo_ptr_type);
           spirv_elem_type->addDecorate(
               new SPIRVDecorate(DecorationBlock, spirv_elem_type));
-          add_array_stride_decoration(
-              mapped_type, M->getDataLayout().getTypeStoreSize(elem_type));
+          // TODO: incorrect?
+          // add_array_stride_decoration(
+          //    mapped_type, M->getDataLayout().getTypeStoreSize(elem_type));
         }
       } else {
         assert(elem_type->isStructTy() && "uniform type must be a struct");
@@ -5614,8 +5622,11 @@ std::pair<GlobalVariable *, SPIRVVariable *> LLVMToSPIRVBase::emitShaderGlobal(
                                       : ".vulkan_builtin_output.");
   } else if (global_type.is_input) {
     name_type = ".vulkan_input.";
+  } else if (global_type.is_ssbo_array) {
+    name_type = ".vulkan_ssbo_array.";
   } else if (global_type.is_uniform) {
-    name_type = ".vulkan_uniform.";
+    name_type =
+        (global_type.is_constant ? ".vulkan_uniform." : ".vulkan_ssbo.");
   }
 
   auto GV = new GlobalVariable(
