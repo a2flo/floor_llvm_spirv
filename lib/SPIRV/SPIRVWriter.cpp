@@ -2181,8 +2181,19 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
         return nullptr;
       }
     }
-    return mapValue(V, BM->addSelectInst(transValue(Sel->getCondition(), BB),
-                                         op_0, op_1, BB));
+    auto select_inst =
+        BM->addSelectInst(transValue(Sel->getCondition(), BB), op_0, op_1, BB);
+    // add NonUniform on OpSelect between pointers (if SSBO/image)
+    // NOTE/TODO: shouldn't really be necessary, but fixes RADV issues
+    if (op_0_type->isTypePointer() && SrcLang == spv::SourceLanguageGLSL) {
+      const auto storage_class = op_0_type->getPointerStorageClass();
+      if (storage_class == spv::StorageClassPhysicalStorageBuffer ||
+          storage_class == spv::StorageClassStorageBuffer ||
+          storage_class == spv::StorageClassImage) {
+        select_inst->addDecorate(DecorationNonUniform);
+      }
+    }
+    return mapValue(V, select_inst);
   }
 
   if (AllocaInst *Alc = dyn_cast<AllocaInst>(V)) {
@@ -6867,11 +6878,13 @@ bool LLVMToSPIRVBase::translate() {
 			}
 		}
 	}
+#if 0 // not necessary? causes issues with RADV
 	for (auto& var : BM->getVariables()) {
 		if (var->hasType() && !var->getType()->isTypeVoid()) {
 			var->addDecorate(DecorationNonUniform);
 		}
 	}
+#endif
 #endif
 
   BM->resolveUnknownStructFields();
