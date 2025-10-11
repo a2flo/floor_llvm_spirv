@@ -2013,22 +2013,28 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
     }
     if (ST->getMetadata(LLVMContext::MD_nontemporal))
       MemoryAccess[0] |= MemoryAccessNontemporalMask;
-#if 0 // NOTE: disabled for now due to performance hit -> TODO: only enable
-      // where needed
-    // always mark global/device pointer with "MakePointerAvailable"
-    if (auto addr_space = ST->getPointerAddressSpace();
-        SrcLang == spv::SourceLanguageGLSL &&
-        (addr_space == SPIRAS_StorageBuffer ||
-         addr_space == SPIRAS_PhysicalStorageBuffer ||
-         addr_space == SPIRAS_Local)) {
-      MemoryAccess[0] |= MemoryAccessMakePointerAvailableMask |
-                         MemoryAccessNonPrivatePointerMask;
-      const auto scope =
-          (addr_space == SPIRAS_Local ? ScopeWorkgroup : ScopeDevice);
-      MemoryAccess.push_back(
-          BM->addIntegerConstant(BM->addIntegerType(32, true), scope)->getId());
+    // handle "floor_coherent" annotated store
+    if (auto annotation = ST->getMetadata(LLVMContext::MD_annotation);
+        annotation) {
+      for (const auto &annotation_op : annotation->operands()) {
+        auto annotation_str = dyn_cast_or_null<llvm::MDString>(annotation_op);
+        if (!annotation_str ||
+            !annotation_str->getString().equals("floor_coherent")) {
+          continue;
+        }
+
+        // mark as MakePointerAvailable + NonPrivatePointer
+        const auto addr_space = ST->getPointerAddressSpace();
+        const auto scope =
+            (addr_space == SPIRAS_Local ? ScopeWorkgroup : ScopeDevice);
+        MemoryAccess[0] |= MemoryAccessMakePointerAvailableMask |
+                           MemoryAccessNonPrivatePointerMask;
+        MemoryAccess.push_back(
+            BM->addIntegerConstant(BM->addIntegerType(32, true), scope)
+                ->getId());
+        break;
+      }
     }
-#endif
     if (MDNode *AliasingListMD = ST->getMetadata(LLVMContext::MD_alias_scope))
       transAliasingMemAccess(BM, AliasingListMD, MemoryAccess,
                              internal::MemoryAccessAliasScopeINTELMask);
@@ -2088,23 +2094,28 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
     }
     if (LD->getMetadata(LLVMContext::MD_nontemporal))
       MemoryAccess[0] |= MemoryAccessNontemporalMask;
-#if 0 // NOTE: disabled for now due to performance hit -> TODO: only enable
-      // where needed
-    // always mark pointers with "MakePointerVisible"
-    if (auto addr_space = LD->getPointerAddressSpace();
-        SrcLang == spv::SourceLanguageGLSL &&
-        (addr_space == SPIRAS_StorageBuffer ||
-         addr_space == SPIRAS_PhysicalStorageBuffer ||
-         addr_space == SPIRAS_Local || addr_space == SPIRAS_Image ||
-         addr_space == SPIRAS_Uniform)) {
-      MemoryAccess[0] |= MemoryAccessMakePointerVisibleMask |
-                         MemoryAccessNonPrivatePointerMask;
-      const auto scope =
-          (addr_space == SPIRAS_Local ? ScopeWorkgroup : ScopeDevice);
-      MemoryAccess.push_back(
-          BM->addIntegerConstant(BM->addIntegerType(32, true), scope)->getId());
+    // handle "floor_coherent" annotated load
+    if (auto annotation = LD->getMetadata(LLVMContext::MD_annotation);
+        annotation) {
+      for (const auto &annotation_op : annotation->operands()) {
+        auto annotation_str = dyn_cast_or_null<llvm::MDString>(annotation_op);
+        if (!annotation_str ||
+            !annotation_str->getString().equals("floor_coherent")) {
+          continue;
+        }
+
+        // mark as MakePointerVisible + NonPrivatePointer
+        const auto addr_space = LD->getPointerAddressSpace();
+        const auto scope =
+            (addr_space == SPIRAS_Local ? ScopeWorkgroup : ScopeDevice);
+        MemoryAccess[0] |= MemoryAccessMakePointerVisibleMask |
+                           MemoryAccessNonPrivatePointerMask;
+        MemoryAccess.push_back(
+            BM->addIntegerConstant(BM->addIntegerType(32, true), scope)
+                ->getId());
+        break;
+      }
     }
-#endif
     if (MDNode *AliasingListMD = LD->getMetadata(LLVMContext::MD_alias_scope))
       transAliasingMemAccess(BM, AliasingListMD, MemoryAccess,
                              internal::MemoryAccessAliasScopeINTELMask);
