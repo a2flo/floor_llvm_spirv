@@ -1999,6 +1999,12 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
     return mapValue(V, BM->addForward(transType(V->getType())));
 
   if (StoreInst *ST = dyn_cast<StoreInst>(V)) {
+    // don't translate stores to nullptr or poison value stores
+    if (isa<ConstantPointerNull>(ST->getPointerOperand()) ||
+        isa<PoisonValue>(ST->getValueOperand())) {
+      return nullptr;
+    }
+
     if (ST->isAtomic())
       return transAtomicStore(ST, BB);
 
@@ -2007,7 +2013,7 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
     std::vector<SPIRVWord> MemoryAccess(1, 0);
     if (ST->isVolatile())
       MemoryAccess[0] |= MemoryAccessVolatileMask;
-    if (ST->getAlignment()) {
+    if (ST->getAlignment() && ST->getPointerAddressSpace() != SPIRAS_Private) {
       MemoryAccess[0] |= MemoryAccessAlignedMask;
       MemoryAccess.push_back(ST->getAlignment());
     }
