@@ -249,6 +249,7 @@ private:
     bool is_fbo_depth{false};
     bool is_read_only{false};
     bool is_write_only{false};
+    bool is_flat{false};
     bool set_location{false};
     uint32_t location{0};
   };

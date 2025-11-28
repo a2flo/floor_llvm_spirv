@@ -5609,7 +5609,8 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
   }
 
   // automatically add the "flat" decoration on types that need it
-  // NOTE: vulkan requires that this is only set on input variables
+  // NOTE: Vulkan requires that this is set on input variables (fragment) and
+  //       output variables (vertex)
   // NOTE: for fragment shaders, also do this for builtin input
   if (storage_class == spv::StorageClassInput && !global_type.is_fbo_color &&
       !global_type.is_fbo_depth &&
@@ -5620,11 +5621,15 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
     if (GV.getType()->isPointerTy()) {
       auto elem_type = GV.getType()->getPointerElementType();
       auto elem_vec_type = dyn_cast_or_null<FixedVectorType>(elem_type);
-      if (elem_type->isIntegerTy() ||
+      if (global_type.is_flat || elem_type->isIntegerTy() ||
           (elem_vec_type && elem_vec_type->getElementType()->isIntegerTy())) {
         BVar->addDecorate(new SPIRVDecorate(DecorationFlat, BVar));
       }
     }
+  }
+  if (storage_class == spv::StorageClassOutput && global_type.is_flat &&
+      F.getCallingConv() == llvm::CallingConv::FLOOR_VERTEX) {
+    BVar->addDecorate(new SPIRVDecorate(DecorationFlat, BVar));
   }
 
   return BVar;
@@ -6410,10 +6415,12 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           spirv_global_io_type global_type;
           global_type.is_input = true;
           global_type.is_read_only = true;
-          if (md_prefix != "stage") {
+          if (md_prefix != "stage" ||
+              (md_prefix == "stage" && md_info == "flat")) {
             // only emit this input if it is an actual input (not a builtin)
             global_type.set_location = true;
             global_type.location = input_location++;
+            global_type.is_flat = (md_info == "flat");
 
             auto [repl_var, _] =
                 emitShaderGlobal(*F, BF, arg_name.str(), arg_type, SPIRAS_Input,
@@ -6494,9 +6501,19 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
                  : md_data_output[output_arg_idx]);
 
         if (md_prefix != "") {
+          // -> flat shaded output
+          if (md_prefix == "stage" && md_info == "flat") {
+            spirv_global_io_type global_type;
+            global_type.is_write_only = true;
+            global_type.set_location = true;
+            global_type.location = output_location++;
+            global_type.is_flat = true;
+            emitShaderSPIRVGlobal(*F, BF, GV, output_name.str(), SPIRAS_Output,
+                                  global_type, md_info);
+          }
           // -> fbo color
-          if (md_prefix == "stage" &&
-              md_info.find("fbo_output:") != std::string::npos) {
+          else if (md_prefix == "stage" &&
+                   md_info.find("fbo_output:") != std::string::npos) {
             spirv_global_io_type global_type;
             global_type.is_write_only = true;
             global_type.is_fbo_color = true;
