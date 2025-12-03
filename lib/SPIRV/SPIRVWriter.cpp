@@ -8010,14 +8010,29 @@ LLVMToSPIRVBase::transBuiltinToInstWithoutDecoration(Op OC, CallInst *CI,
       }
       auto *SPI = SPIRVInstTemplateBase::create(OC);
       std::vector<SPIRVWord> SPArgs;
+      std::vector<SPIRVValue *> SPArgsValues;
       for (size_t I = 0, E = Args.size(); I != E; ++I) {
         assert((!isFunctionPointerType(Args[I]->getType()) ||
                 isa<Function>(Args[I])) &&
                "Invalid function pointer argument");
-        SPArgs.push_back(SPI->isOperandLiteral(I)
-                             ? cast<ConstantInt>(Args[I])->getZExtValue()
-                             : transValue(Args[I], BB)->getId());
+        SPArgsValues.push_back(
+            !SPI->isOperandLiteral(I) ? transValue(Args[I], BB) : nullptr);
+        SPArgs.push_back(!SPI->isOperandLiteral(I)
+                             ? SPArgsValues.back()->getId()
+                             : cast<ConstantInt>(Args[I])->getZExtValue());
       }
+
+      // fix up potential int <-> uint argument type mismatch in atomics
+      if (isAtomicOpCode(OC)) {
+        const auto last_arg_idx = SPArgs.size() - 1;
+        const auto &last_arg = SPArgsValues[last_arg_idx];
+        if (last_arg != nullptr && last_arg->getType() != SPRetTy) {
+          const auto bc_arg =
+              BM->addUnaryInst(spv::OpBitcast, SPRetTy, last_arg, BB);
+          SPArgs[last_arg_idx] = bc_arg->getId();
+        }
+      }
+
       BM->addInstTemplate(SPI, SPArgs, BB, SPRetTy);
       if (!SPRetTy || !SPRetTy->isTypeStruct())
         return SPI;
