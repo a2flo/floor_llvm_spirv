@@ -2575,18 +2575,35 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
 
   if (auto Ins = dyn_cast<InsertElementInst>(V)) {
     auto Index = Ins->getOperand(2);
-    if (auto Const = dyn_cast<ConstantInt>(Index)) {
-      return mapValue(
-          V,
-          BM->addCompositeInsertInst(
-              transValue(Ins->getOperand(1), BB, true, FuncTransMode::Pointer),
-              transValue(Ins->getOperand(0), BB),
-              std::vector<SPIRVWord>(1, Const->getZExtValue()), BB));
-    } else
-      return mapValue(
-          V, BM->addVectorInsertDynamicInst(transValue(Ins->getOperand(0), BB),
-                                            transValue(Ins->getOperand(1), BB),
-                                            transValue(Index, BB), BB));
+    auto Const = dyn_cast<ConstantInt>(Index);
+    auto composite = transValue(Ins->getOperand(0), BB);
+    auto elem = (Const ? transValue(Ins->getOperand(1), BB, true,
+                                    FuncTransMode::Pointer)
+                       : transValue(Ins->getOperand(1), BB));
+
+    // handle int<->uint type mismatch when inserting into a vector
+    if (composite->getType()->isTypeVector()) {
+      const auto scalar_type = composite->getType()->getVectorComponentType();
+      const auto elem_type = elem->getType();
+      if (elem_type != scalar_type && elem_type->isTypeInt() &&
+          scalar_type->isTypeInt()) {
+        const auto elem_int_type = (SPIRVTypeInt *)elem_type;
+        const auto scalar_int_type = (SPIRVTypeInt *)scalar_type;
+        assert(elem_int_type->getBitWidth() == scalar_int_type->getBitWidth());
+        assert(elem_int_type->isSigned() != scalar_int_type->isSigned());
+        elem = BM->addUnaryInst(spv::OpBitcast, scalar_int_type, elem, BB);
+      }
+    }
+
+    if (Const) {
+      return mapValue(V, BM->addCompositeInsertInst(
+                             elem, composite,
+                             std::vector<SPIRVWord>(1, Const->getZExtValue()),
+                             BB));
+    } else {
+      return mapValue(V, BM->addVectorInsertDynamicInst(
+                             composite, elem, transValue(Index, BB), BB));
+    }
   }
 
   if (auto SF = dyn_cast<ShuffleVectorInst>(V)) {
