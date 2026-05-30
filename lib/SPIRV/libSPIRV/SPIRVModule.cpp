@@ -495,6 +495,14 @@ public:
                                     SPIRVBasicBlock *BB) override;
   SPIRVInstruction *addBitReverseInst(SPIRVType *ret_type, SPIRVValue *p,
                                       SPIRVBasicBlock *BB) override;
+  SPIRVInstruction *addEmitMeshTasksInst(SPIRVValue *group_count_x,
+                                         SPIRVValue *group_count_y,
+                                         SPIRVValue *group_count_z,
+                                         SPIRVValue *payload,
+                                         SPIRVBasicBlock *BB) override;
+  SPIRVInstruction *addSetMeshOutputsInst(SPIRVValue *vertex_count,
+                                          SPIRVValue *primitive_count,
+                                          SPIRVBasicBlock *BB) override;
 
   // other ext functions
   SPIRVInstruction *addFPGARegINTELInst(SPIRVType *, SPIRVValue *,
@@ -1378,7 +1386,8 @@ SPIRVEntry *SPIRVModuleImpl::addSpecConstantCompositeContinuedINTEL(
 
 SPIRVValue *SPIRVModuleImpl::addConstFunctionPointerINTEL(SPIRVType *Ty,
                                                           SPIRVFunction *F) {
-  return addConstant(new SPIRVConstFunctionPointerINTEL(getId(), Ty, F, this));
+  return addConstant(
+      new SPIRVConstantFunctionPointerINTEL(getId(), Ty, F, this));
 }
 
 SPIRVValue *SPIRVModuleImpl::addUndef(SPIRVType *TheType) {
@@ -2147,6 +2156,26 @@ SPIRVInstruction *SPIRVModuleImpl::addBitReverseInst(SPIRVType *ret_type,
       SPIRVInstTemplateBase::create(spv::OpBitReverse, ret_type, getId(),
                                     getVec(p->getId()), BB, this),
       BB);
+}
+
+SPIRVInstruction *SPIRVModuleImpl::addEmitMeshTasksInst(
+    SPIRVValue *group_count_x, SPIRVValue *group_count_y,
+    SPIRVValue *group_count_z, SPIRVValue *payload, SPIRVBasicBlock *BB) {
+  if (!payload) {
+    return addInstruction(
+        new SPIRVEmitMeshTasks(group_count_x, group_count_y, group_count_z, BB),
+        BB);
+  }
+  return addInstruction(new SPIRVEmitMeshTasks(group_count_x, group_count_y,
+                                               group_count_z, payload, BB),
+                        BB);
+}
+SPIRVInstruction *
+SPIRVModuleImpl::addSetMeshOutputsInst(SPIRVValue *vertex_count,
+                                       SPIRVValue *primitive_count,
+                                       SPIRVBasicBlock *BB) {
+  return addInstruction(
+      new SPIRVSetMeshOutputs(vertex_count, primitive_count, BB), BB);
 }
 
 template <class T>

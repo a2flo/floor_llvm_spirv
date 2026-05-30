@@ -169,11 +169,7 @@ void PreprocessMetadataBase::visit(Module *M) {
   // Add execution modes for kernels. We take it from metadata attached to
   // the kernel functions.
   for (Function &Func : *M) {
-    if (Func.getCallingConv() != CallingConv::FLOOR_KERNEL &&
-		Func.getCallingConv() != CallingConv::FLOOR_VERTEX &&
-		Func.getCallingConv() != CallingConv::FLOOR_FRAGMENT &&
-		Func.getCallingConv() != CallingConv::FLOOR_TESS_CONTROL &&
-		Func.getCallingConv() != CallingConv::FLOOR_TESS_EVAL)
+    if (!CallingConv::isFloorEntryPoint(Func.getCallingConv()))
       continue;
 
     // Specifing execution modes for the Kernel and adding it to the list
@@ -375,7 +371,9 @@ void PreprocessMetadataBase::preprocessVectorComputeMetadata(Module *M,
   auto EM = B->addNamedMD(kSPIRVMD::ExecutionMode);
 
   for (auto &F : *M) {
-    if (F.getCallingConv() != CallingConv::FLOOR_KERNEL)
+    if (F.getCallingConv() != CallingConv::FLOOR_KERNEL &&
+		F.getCallingConv() != CallingConv::FLOOR_TASK &&
+		F.getCallingConv() != CallingConv::FLOOR_MESH)
       continue;
 
     // Add VC float control execution modes

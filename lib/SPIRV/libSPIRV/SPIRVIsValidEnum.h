@@ -65,6 +65,8 @@ inline bool isValid(spv::ExecutionModel V) {
   case ExecutionModelKernel:
   case ExecutionModelTaskNV:
   case ExecutionModelMeshNV:
+  case ExecutionModelTaskEXT:
+  case ExecutionModelMeshEXT:
   case ExecutionModelRayGenerationKHR:
   case ExecutionModelIntersectionKHR:
   case ExecutionModelAnyHitKHR:
@@ -127,6 +129,7 @@ inline bool isValid(spv::StorageClass V) {
   case StorageClassCodeSectionINTEL:
   case StorageClassDeviceOnlyINTEL:
   case StorageClassHostOnlyINTEL:
+  case StorageClassTaskPayloadWorkgroupEXT:
     return true;
   default:
     return false;
@@ -273,6 +276,10 @@ inline bool isValid(spv::BuiltIn V) {
   case BuiltInSMCountNV:
   case BuiltInWarpIDNV:
   case BuiltInSMIDNV:
+  case BuiltInCullPrimitiveEXT:
+  case BuiltInPrimitivePointIndicesEXT:
+  case BuiltInPrimitiveLineIndicesEXT:
+  case BuiltInPrimitiveTriangleIndicesEXT:
   case internal::BuiltInSubDeviceIDINTEL:
   case internal::BuiltInHWThreadIDINTEL:
   case internal::BuiltInMaxHWThreadIDPerSubDeviceINTEL:

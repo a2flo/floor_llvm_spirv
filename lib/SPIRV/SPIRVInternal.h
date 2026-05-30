@@ -206,6 +206,7 @@ enum SPIRAddressSpace {
   // Function = SPIRAS_Private
   // UniformConstant = SPIRAS_Constant
   SPIRAS_PhysicalStorageBuffer = 5349,
+  SPIRAS_TaskPayloadWorkgroup = 5402,
 };
 
 template <> inline void SPIRVMap<SPIRAddressSpace, std::string>::init() {
@@ -247,6 +248,7 @@ inline void SPIRVMap<SPIRAddressSpace, SPIRVStorageClassKind>::init() {
   add(SPIRAS_Image, StorageClassImage);
   add(SPIRAS_StorageBuffer, StorageClassStorageBuffer);
   add(SPIRAS_PhysicalStorageBuffer, StorageClassPhysicalStorageBuffer);
+  add(SPIRAS_TaskPayloadWorkgroup, StorageClassTaskPayloadWorkgroupEXT);
 }
 typedef SPIRVMap<SPIRAddressSpace, SPIRVStorageClassKind> SPIRSPIRVAddrSpaceMap;
 

@@ -3502,6 +3502,99 @@ _SPIRV_OP(JointMatrixLoad, true, 6, true)
 _SPIRV_OP(JointMatrixStore, false, 5, true)
 _SPIRV_OP(JointMatrixMad, true, 7)
 #undef _SPIRV_OP
+
+class SPIRVEmitMeshTasks : public SPIRVInstruction {
+public:
+	static const Op OC = OpEmitMeshTasksEXT;
+	
+	// Complete constructor
+	SPIRVEmitMeshTasks(SPIRVValue *group_count_x_, SPIRVValue *group_count_y_, SPIRVValue *group_count_z_, SPIRVBasicBlock *TheBB)
+	: SPIRVInstruction(4, OC, TheBB), group_count_x(group_count_x_->getId()), group_count_y(group_count_y_->getId()), group_count_z(group_count_z_->getId()) {
+		validate();
+		assert(TheBB && "Invalid BB");
+	}
+	SPIRVEmitMeshTasks(SPIRVValue *group_count_x_, SPIRVValue *group_count_y_, SPIRVValue *group_count_z_, SPIRVValue *payload_, SPIRVBasicBlock *TheBB)
+	: SPIRVInstruction(5, OC, TheBB), group_count_x(group_count_x_->getId()), group_count_y(group_count_y_->getId()), group_count_z(group_count_z_->getId()), payload(payload_->getId()) {
+		validate();
+		assert(TheBB && "Invalid BB");
+	}
+	
+	void setWordCount(SPIRVWord TheWordCount) override {
+		SPIRVEntry::setWordCount(TheWordCount);
+		assert(TheWordCount == 4 || TheWordCount == 5);
+	}
+	std::vector<SPIRVValue *> getOperands() override {
+		std::vector<SPIRVId> Operands;
+		Operands.push_back(group_count_x);
+		Operands.push_back(group_count_y);
+		Operands.push_back(group_count_z);
+		if (payload != SPIRVID_INVALID) {
+			Operands.push_back(payload);
+		}
+		return getValues(Operands);
+	}
+	
+	SPIRVCapVec getRequiredCapability() const override {
+		return getVec(CapabilityMeshShadingEXT);
+	}
+	llvm::Optional<ExtensionID> getRequiredExtension() const override {
+		return ExtensionID::SPV_EXT_mesh_shader;
+	}
+	
+protected:
+	_SPIRV_DEF_ENCDEC4(group_count_x, group_count_y, group_count_z, payload)
+	void validate() const override {
+		assert(OpCode == OC);
+		assert(WordCount == 4 || WordCount == 5);
+		SPIRVInstruction::validate();
+	}
+	SPIRVId group_count_x { SPIRVID_INVALID };
+	SPIRVId group_count_y { SPIRVID_INVALID };
+	SPIRVId group_count_z { SPIRVID_INVALID };
+	SPIRVId payload { SPIRVID_INVALID }; //!< optional
+};
+
+class SPIRVSetMeshOutputs : public SPIRVInstruction {
+public:
+	static const Op OC = OpSetMeshOutputsEXT;
+	static const SPIRVWord FixedWordCount = 3;
+	
+	// Complete constructor
+	SPIRVSetMeshOutputs(SPIRVValue *vertex_count_, SPIRVValue *primitive_count_, SPIRVBasicBlock *TheBB)
+	: SPIRVInstruction(FixedWordCount, OC, TheBB), vertex_count(vertex_count_->getId()), primitive_count(primitive_count_->getId()) {
+		validate();
+		assert(TheBB && "Invalid BB");
+	}
+	
+	void setWordCount(SPIRVWord TheWordCount) override {
+		SPIRVEntry::setWordCount(TheWordCount);
+		assert(TheWordCount == FixedWordCount);
+	}
+	std::vector<SPIRVValue *> getOperands() override {
+		std::vector<SPIRVId> Operands;
+		Operands.push_back(vertex_count);
+		Operands.push_back(primitive_count);
+		return getValues(Operands);
+	}
+	
+	SPIRVCapVec getRequiredCapability() const override {
+		return getVec(CapabilityMeshShadingEXT);
+	}
+	llvm::Optional<ExtensionID> getRequiredExtension() const override {
+		return ExtensionID::SPV_EXT_mesh_shader;
+	}
+	
+protected:
+	_SPIRV_DEF_ENCDEC2(vertex_count, primitive_count)
+	void validate() const override {
+		assert(OpCode == OC);
+		assert(WordCount == FixedWordCount);
+		SPIRVInstruction::validate();
+	}
+	SPIRVId vertex_count { SPIRVID_INVALID };
+	SPIRVId primitive_count { SPIRVID_INVALID };
+};
+
 } // namespace SPIRV
 
 #endif // SPIRV_LIBSPIRV_SPIRVINSTRUCTION_H

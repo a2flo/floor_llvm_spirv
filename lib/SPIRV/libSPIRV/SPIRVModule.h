@@ -519,6 +519,8 @@ public:
   virtual SPIRVInstruction *addBitReverseInst(SPIRVType *ret_type,
                                               SPIRVValue *p,
                                               SPIRVBasicBlock *BB) = 0;
+  virtual SPIRVInstruction *addEmitMeshTasksInst(SPIRVValue *group_count_x, SPIRVValue *group_count_y, SPIRVValue *group_count_z, SPIRVValue *payload, SPIRVBasicBlock *BB) = 0;
+  virtual SPIRVInstruction *addSetMeshOutputsInst(SPIRVValue* vertex_count, SPIRVValue* primitive_count, SPIRVBasicBlock *BB) = 0;
 
   virtual SPIRVId getExtInstSetId(SPIRVExtInstSetKind Kind) const = 0;
 

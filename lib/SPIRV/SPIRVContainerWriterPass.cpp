@@ -60,6 +60,8 @@
 //  * fragment: 3
 //  * tessellation control: 4
 //  * tessellation evaluation: 5
+//  * task: 6
+//  * mesh: 7
 //
 //===----------------------------------------------------------------------===//
 
@@ -77,11 +79,16 @@
 using namespace llvm;
 
 static bool is_used_in_function(const Function *F, const GlobalVariable *GV) {
+  const auto func_name = F->getName().str();
+
   // always flag certain builtin constants as used
   switch (F->getCallingConv()) {
   case CallingConv::FLOOR_KERNEL:
-    if (GV->getName().find(".vulkan_constant.local_size") != StringRef::npos)
+  case CallingConv::FLOOR_TASK:
+  case CallingConv::FLOOR_MESH:
+    if (GV->getName().startswith(func_name + ".vulkan_constant.local_size")) {
       return true;
+    }
     break;
   case CallingConv::FLOOR_VERTEX:
   case CallingConv::FLOOR_FRAGMENT:
@@ -90,8 +97,9 @@ static bool is_used_in_function(const Function *F, const GlobalVariable *GV) {
     break;
   }
 
-  // always keep work-group memory aliases for a given function
-  if (GV->getName().startswith("wg.alias." + F->getName().str() + ".")) {
+  // always keep work-group memory aliases + output variables for a given function
+  if (GV->getName().startswith("wg.alias." + func_name + ".") ||
+	  GV->getName().startswith(func_name + ".vulkan_output.")) {
     return true;
   }
 
@@ -117,11 +125,7 @@ static bool write_container(Module &M, raw_ostream &OS) {
   // gather entry point functions that we want to clone/emit
   std::unordered_set<const Function *> clone_functions;
   for (const auto &F : M) {
-    if (F.getCallingConv() != CallingConv::FLOOR_KERNEL &&
-        F.getCallingConv() != CallingConv::FLOOR_VERTEX &&
-        F.getCallingConv() != CallingConv::FLOOR_FRAGMENT &&
-        F.getCallingConv() != CallingConv::FLOOR_TESS_CONTROL &&
-        F.getCallingConv() != CallingConv::FLOOR_TESS_EVAL) {
+    if (!CallingConv::isFloorEntryPoint(F.getCallingConv())) {
       continue;
     }
     clone_functions.emplace(&F);
@@ -160,7 +164,8 @@ static bool write_container(Module &M, raw_ostream &OS) {
       if (G.getLinkage() == GlobalValue::ExternalLinkage ||
           G.getLinkage() == GlobalValue::AvailableExternallyLinkage ||
           G.getLinkage() == GlobalValue::PrivateLinkage ||
-          G.getLinkage() == GlobalValue::ExternalWeakLinkage) {
+          G.getLinkage() == GlobalValue::ExternalWeakLinkage ||
+          G.getLinkage() == GlobalValue::ExternallyRequiredLinkage) {
         if (!is_used_in_function(cloned_func, &G)) {
           kill_globals.emplace_back(&G);
         }
@@ -168,10 +173,7 @@ static bool write_container(Module &M, raw_ostream &OS) {
     }
     for (Function &F : cloned_mod->functions()) {
       const auto CC = F.getCallingConv();
-      if (CC == CallingConv::FLOOR_KERNEL || CC == CallingConv::FLOOR_VERTEX ||
-          CC == CallingConv::FLOOR_FRAGMENT ||
-          CC == CallingConv::FLOOR_TESS_CONTROL ||
-          CC == CallingConv::FLOOR_TESS_EVAL) {
+      if (CallingConv::isFloorEntryPoint(CC)) {
         if (&F != cloned_func) {
           kill_functions.emplace_back(&F);
         }
@@ -199,6 +201,9 @@ static bool write_container(Module &M, raw_ostream &OS) {
     exts[SPIRV::ExtensionID::SPV_KHR_maximal_reconvergence] = true;
     if (M.getNamedMetadata("floor.vulkan_subgroup_uniform_cf")) {
       exts[SPIRV::ExtensionID::SPV_KHR_subgroup_uniform_control_flow] = true;
+    }
+    if (M.getNamedMetadata("floor.vulkan_mesh_shading")) {
+      exts[SPIRV::ExtensionID::SPV_EXT_mesh_shader] = true;
     }
     //exts[SPIRV::ExtensionID::SPV_KHR_no_integer_wrap_decoration] = true;
     //exts[SPIRV::ExtensionID::SPV_KHR_float_controls] = true;
@@ -247,6 +252,12 @@ static bool write_container(Module &M, raw_ostream &OS) {
       break;
     case CallingConv::FLOOR_TESS_EVAL:
       function_type = 5;
+      break;
+    case CallingConv::FLOOR_TASK:
+      function_type = 6;
+      break;
+    case CallingConv::FLOOR_MESH:
+      function_type = 7;
       break;
     default:
       llvm_unreachable("invalid function type");

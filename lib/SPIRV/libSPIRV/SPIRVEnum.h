@@ -149,8 +149,6 @@ template <typename K> SPIRVCapVec getCapability(K Key) {
 
 template <> inline void SPIRVMap<SPIRVCapabilityKind, SPIRVCapVec>::init() {
   ADD_VEC_INIT(CapabilityShader, {CapabilityMatrix});
-  ADD_VEC_INIT(CapabilityGeometry, {CapabilityShader});
-  ADD_VEC_INIT(CapabilityTessellation, {CapabilityShader});
   ADD_VEC_INIT(CapabilityVector16, {CapabilityKernel});
   ADD_VEC_INIT(CapabilityFloat16Buffer, {CapabilityKernel});
   ADD_VEC_INIT(CapabilityInt64Atomics, {CapabilityInt64});
@@ -203,12 +201,11 @@ template <> inline void SPIRVMap<SPIRVCapabilityKind, SPIRVCapVec>::init() {
 
 template <> inline void SPIRVMap<SPIRVExecutionModelKind, SPIRVCapVec>::init() {
   ADD_VEC_INIT(ExecutionModelVertex, {CapabilityShader});
-  ADD_VEC_INIT(ExecutionModelTessellationControl, {CapabilityTessellation});
-  ADD_VEC_INIT(ExecutionModelTessellationEvaluation, {CapabilityTessellation});
-  ADD_VEC_INIT(ExecutionModelGeometry, {CapabilityGeometry});
   ADD_VEC_INIT(ExecutionModelFragment, {CapabilityShader});
   ADD_VEC_INIT(ExecutionModelGLCompute, {CapabilityShader});
   ADD_VEC_INIT(ExecutionModelKernel, {CapabilityKernel});
+  ADD_VEC_INIT(ExecutionModelTaskEXT, {CapabilityMeshShadingEXT});
+  ADD_VEC_INIT(ExecutionModelMeshEXT, {CapabilityMeshShadingEXT});
 }
 
 template <> inline void SPIRVMap<SPIRVExecutionModeKind, SPIRVCapVec>::init() {
@@ -283,6 +280,7 @@ template <> inline void SPIRVMap<SPIRVStorageClassKind, SPIRVCapVec>::init() {
   ADD_VEC_INIT(StorageClassAtomicCounter, {CapabilityAtomicStorage});
   ADD_VEC_INIT(StorageClassDeviceOnlyINTEL, {CapabilityUSMStorageClassesINTEL});
   ADD_VEC_INIT(StorageClassHostOnlyINTEL, {CapabilityUSMStorageClassesINTEL});
+  ADD_VEC_INIT(StorageClassTaskPayloadWorkgroupEXT, {CapabilityMeshShadingEXT});
 }
 
 template <> inline void SPIRVMap<SPIRVImageDimKind, SPIRVCapVec>::init() {
@@ -446,6 +444,7 @@ template <> inline void SPIRVMap<Decoration, SPIRVCapVec>::init() {
                {internal::CapabilityFPGAInvocationPipeliningAttributesINTEL});
   ADD_VEC_INIT(internal::DecorationRuntimeAlignedINTEL,
                {internal::CapabilityRuntimeAlignedAttributeINTEL});
+  ADD_VEC_INIT(DecorationPerPrimitiveEXT, {CapabilityMeshShadingEXT});
 }
 
 template <> inline void SPIRVMap<BuiltIn, SPIRVCapVec>::init() {
@@ -506,6 +505,10 @@ template <> inline void SPIRVMap<BuiltIn, SPIRVCapVec>::init() {
                {internal::CapabilityHWThreadQueryINTEL});
   ADD_VEC_INIT(BuiltInViewIndex, {CapabilityMultiView});
   ADD_VEC_INIT(BuiltInBaryCoordKHR, {CapabilityFragmentBarycentricKHR});
+  ADD_VEC_INIT(BuiltInCullPrimitiveEXT, {CapabilityMeshShadingEXT});
+  ADD_VEC_INIT(BuiltInPrimitivePointIndicesEXT, {CapabilityMeshShadingEXT});
+  ADD_VEC_INIT(BuiltInPrimitiveLineIndicesEXT, {CapabilityMeshShadingEXT});
+  ADD_VEC_INIT(BuiltInPrimitiveTriangleIndicesEXT, {CapabilityMeshShadingEXT});
 }
 
 template <> inline void SPIRVMap<MemorySemanticsMask, SPIRVCapVec>::init() {

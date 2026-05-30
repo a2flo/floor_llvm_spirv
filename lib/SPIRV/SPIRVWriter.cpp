@@ -84,6 +84,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/LibFloor/VulkanSampling.h"
 #include "llvm/Transforms/LibFloor/FloorUtils.h"
+#include "llvm/Transforms/LibFloor.h"
 #include "llvm/Transforms/Utils.h" // loop-simplify pass
 
 #include <cstdlib>
@@ -102,6 +103,136 @@ using namespace SPIRV;
 using namespace OCLUtil;
 
 namespace SPIRV {
+
+//! helper functions to force an integer or int-vector value to be unsigned
+//! (!to_signed) or signed (to_signed)
+static inline SPIRVValue *force_value_with_sign(SPIRVValue *val,
+                                                const bool to_signed,
+                                                SPIRVBasicBlock *BB,
+                                                SPIRVModule *BM) {
+  auto type = val->getType();
+  if (!type->isTypeVectorOrScalarInt()) {
+    assert(false && "expected an integer or int-vector type");
+    return val;
+  }
+
+  if (type->isTypeInt()) { // scalar
+    const auto int_type = ((SPIRVTypeInt *)type);
+    const auto is_signed = int_type->isSigned();
+    if (is_signed != to_signed) {
+      // bitcast to wanted signedness
+      return BM->addUnaryInst(
+          spv::OpBitcast,
+          to_signed ? int_type->getSigned() : int_type->getUnsigned(), val, BB);
+    }
+  } else { // vector
+    const auto vec_type = (SPIRVTypeVector *)type;
+    const auto comp_type = (SPIRVTypeInt *)vec_type->getComponentType();
+    const auto is_signed = comp_type->isSigned();
+    if (is_signed != to_signed) {
+      // bitcast to wanted signedness
+      return BM->addUnaryInst(spv::OpBitcast,
+                              BM->addVectorType(to_signed
+                                                    ? comp_type->getSigned()
+                                                    : comp_type->getUnsigned(),
+                                                vec_type->getComponentCount()),
+                              val, BB);
+    }
+  }
+  // otherwise: already the correct sign
+  return val;
+}
+
+//! helper functions to force an integer or int-vector value to be unsigned
+static inline SPIRVValue *force_uint_value(SPIRVValue *val, SPIRVBasicBlock *BB,
+                                           SPIRVModule *BM) {
+  return force_value_with_sign(val, false, BB, BM);
+}
+
+//! helper functions to force an integer or int-vector value to be signed
+static inline SPIRVValue *force_int_value(SPIRVValue *val, SPIRVBasicBlock *BB,
+                                          SPIRVModule *BM) {
+  return force_value_with_sign(val, true, BB, BM);
+}
+
+//! helper functions to force an integer or int-vector LLVM value to be an
+//! unsigned (!to_signed) or signed (to_signed) SPIR-V value NOTE: if
+//! "wanted_bitness" is != ~0u, this will also perform a cast to the wanted
+//! bitness NOTE: this also handles constant values
+static inline SPIRVValue *
+force_value_with_sign(llvm::Value *val, const bool to_signed,
+                      SPIRVBasicBlock *BB, SPIRVModule *BM,
+                      LLVMToSPIRVBase *pass,
+                      const uint32_t wanted_bitness = ~0u) {
+  if (!val->getType()->isIntOrIntVectorTy()) {
+    assert(false && "expected an integer or int-vector type");
+    return nullptr;
+  }
+
+  // constant handling
+  if (isa<Constant>(val)) {
+    if (const auto const_int = dyn_cast_or_null<ConstantInt>(val); const_int) {
+      const auto spirv_type = BM->addIntegerType(
+          wanted_bitness != ~0u ? wanted_bitness
+                                : const_int->getType()->getBitWidth(),
+          to_signed);
+      return BM->addIntegerConstant(
+          spirv_type, !to_signed
+                          ? const_int->getZExtValue()
+                          : std::bit_cast<uint64_t>(const_int->getSExtValue()));
+    } else if (const auto const_int_vec = dyn_cast_or_null<ConstantVector>(val);
+               const_int_vec) {
+      const auto elem_count = const_int_vec->getType()->getNumElements();
+      const auto elem_type = const_int_vec->getType()->getElementType();
+      const auto spirv_elem_type = BM->addIntegerType(
+          wanted_bitness != ~0u ? wanted_bitness
+                                : elem_type->getIntegerBitWidth(),
+          to_signed);
+      const auto spirv_vec_type =
+          BM->addVectorType(spirv_elem_type, elem_count);
+      std::vector<SPIRVValue *> spirv_comps(elem_count, nullptr);
+      for (uint32_t i = 0; i < elem_count; ++i) {
+        spirv_comps[i] = BM->addIntegerConstant(
+            spirv_elem_type,
+            !to_signed ? const_int->getZExtValue()
+                       : std::bit_cast<uint64_t>(const_int->getSExtValue()));
+      }
+      return BM->addCompositeConstant(spirv_vec_type, spirv_comps);
+    }
+    assert(false && "invalid constant value");
+    return nullptr;
+  }
+
+  auto spirv_val = pass->transValue(val, BB);
+  auto spirv_type = spirv_val->getType();
+
+  // handle bitness conversion (using the current sign, can't do both
+  // conversions at once)
+  if (wanted_bitness != ~0u) {
+    if (spirv_type->isTypeVectorOrScalarInt()) {
+      const auto int_type =
+          (SPIRVTypeInt *)(spirv_type->isTypeInt()
+                               ? spirv_type
+                               : spirv_type->getVectorComponentType());
+      if (int_type->getBitWidth() != wanted_bitness) {
+        SPIRVType *cast_type =
+            BM->addIntegerType(wanted_bitness, int_type->isSigned());
+        if (spirv_type->isTypeVector()) {
+          cast_type = BM->addVectorType(cast_type,
+                                        spirv_type->getVectorComponentCount());
+        }
+        spirv_val = BM->addUnaryInst(int_type->isSigned() ? spv::OpSConvert
+                                                          : spv::OpUConvert,
+                                     cast_type, spirv_val, BB);
+      }
+    } else {
+      assert(false && "invalid type");
+      return nullptr;
+    }
+  }
+
+  return force_value_with_sign(spirv_val, to_signed, BB, BM);
+}
 
 static void foreachKernelArgMD(
     MDNode *MD, SPIRVFunction *BF,
@@ -179,11 +310,7 @@ SPIRVValue *LLVMToSPIRVBase::getTranslatedValue(const Value *V) const {
 }
 
 bool LLVMToSPIRVBase::isEntryPoint(Function *F) {
-  if (F->getCallingConv() == CallingConv::FLOOR_KERNEL ||
-      F->getCallingConv() == CallingConv::FLOOR_VERTEX ||
-      F->getCallingConv() == CallingConv::FLOOR_FRAGMENT ||
-      F->getCallingConv() == CallingConv::FLOOR_TESS_CONTROL ||
-      F->getCallingConv() == CallingConv::FLOOR_TESS_EVAL)
+  if (CallingConv::isFloorEntryPoint(F->getCallingConv()))
     return true;
   return false;
 }
@@ -203,6 +330,10 @@ spv::ExecutionModel LLVMToSPIRVBase::getEntryPointType(Function *F,
     return spv::ExecutionModel::ExecutionModelTessellationControl;
   case CallingConv::FLOOR_TESS_EVAL:
     return spv::ExecutionModel::ExecutionModelTessellationEvaluation;
+  case CallingConv::FLOOR_TASK:
+    return spv::ExecutionModel::ExecutionModelTaskEXT;
+  case CallingConv::FLOOR_MESH:
+    return spv::ExecutionModel::ExecutionModelMeshEXT;
   default:
     return spv::ExecutionModel::ExecutionModelInvalid;
   }
@@ -697,7 +828,7 @@ SPIRVType *LLVMToSPIRVBase::addSignPreservingLLVMType(llvm::Type *type,
     auto elem_type = vec_type->getElementType();
     auto elem_count = vec_type->getNumElements();
     if (is_signed) {
-      return BM->addVectorType(transType(type), elem_count);
+      return BM->addVectorType(transType(elem_type), elem_count);
     } else {
       auto scalar_uint_type = add_scalar_uint_type(elem_type);
       return BM->addVectorType(scalar_uint_type, elem_count);
@@ -1275,8 +1406,8 @@ SPIRVInstruction *LLVMToSPIRVBase::transCmpInst(CmpInst *Cmp,
   return BI;
 }
 
-SPIRV::SPIRVInstruction *LLVMToSPIRVBase::transUnaryInst(UnaryInstruction *U,
-                                                         SPIRVBasicBlock *BB) {
+SPIRV::SPIRVValue *LLVMToSPIRVBase::transUnaryInst(UnaryInstruction *U,
+                                                   SPIRVBasicBlock *BB) {
   // TODO: properly handle int/uint conversions and type handling
   Op BOC = OpNop;
   if (auto Cast = dyn_cast<AddrSpaceCastInst>(U)) {
@@ -2499,7 +2630,8 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
                                                    TransPointerOperand, Indices,
                                                    BB, GEP->isInBounds()));
     } else {
-      const auto needs_ptr_access_chain = !isa<GlobalValue>(PointerOperand);
+      const auto is_base_global = isa<GlobalValue>(PointerOperand);
+      const auto needs_ptr_access_chain = !is_base_global;
       // with variable pointers we can now use PtrAccessChain instead of the
       // simple AccessChain (for SSBOs, local memory and physical SSBOs)
       if (needs_ptr_access_chain &&
@@ -2543,10 +2675,25 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
                                          false /* never emit inbounds */));
       } else {
         // for all other storage classes: fall back to (Inbounds)AccessChain
+        bool erase_first_index_if_static_array = true;
+        if (is_base_global && storage_class == spv::StorageClassStorageBuffer) {
+          if (auto gep_value_elem_type =
+                  gep_value_type->getPointerElementType();
+              gep_value_elem_type->isTypeStruct() &&
+              PointerOperand->getType()->getPointerElementType()->isArrayTy()) {
+            // -> SSBO with non-run-time array, don't erase the first index
+            erase_first_index_if_static_array = false;
+
+            // NOTE: for further GEPs that use this as the base, we shouldn't
+            // need to adjust them (in PtrAccessChain) as the first struct
+            // access (0) is already accounted for here
+          }
+        }
         return mapValue(
             V, BM->addAccessChainInst(transType(GEP->getType()),
                                       transValue(GEP->getPointerOperand(), BB),
-                                      Indices, BB, GEP->isInBounds()));
+                                      Indices, BB, GEP->isInBounds(),
+                                      erase_first_index_if_static_array));
       }
     }
   }
@@ -4482,36 +4629,6 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
         Dec);
   }
 
-  // helper functions to force an integer value to be unsigned or signed
-  const auto force_uint_value = [&BB, this](SPIRVValue *val) -> SPIRVValue * {
-    auto type = val->getType();
-    if (!type->isTypeInt()) {
-      assert(false && "expected an integer type");
-      return val;
-    }
-    if (((SPIRVTypeInt *)type)->isSigned()) {
-      // bitcast to unsigned
-      return BM->addUnaryInst(spv::OpBitcast,
-                              ((SPIRVTypeInt *)type)->getUnsigned(), val, BB);
-    }
-    // already unsigned
-    return val;
-  };
-  const auto force_int_value = [&BB, this](SPIRVValue *val) -> SPIRVValue * {
-    auto type = val->getType();
-    if (!type->isTypeInt()) {
-      assert(false && "expected an integer type");
-      return val;
-    }
-    if (!((SPIRVTypeInt *)type)->isSigned()) {
-      // bitcast to signed
-      return BM->addUnaryInst(spv::OpBitcast,
-                              ((SPIRVTypeInt *)type)->getSigned(), val, BB);
-    }
-    // already signed
-    return val;
-  };
-
   // TODO: put this into an extra function + use lut
   if (MangledName.startswith("floor.")) {
     if (MangledName.startswith("floor.composite_construct.")) {
@@ -4545,7 +4662,7 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
       auto arg = transValue(CI->getArgOperand(0), BB);
       if (MangledName.startswith("floor.find_int_lsb.u")) {
         // force uint eval
-        arg = force_uint_value(arg);
+        arg = force_uint_value(arg, BB, BM);
       }
       return BM->addExtInst(
           ((SPIRVTypeInt *)arg->getType())->getSigned() /* force signed */,
@@ -4556,11 +4673,11 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
       bool is_uint = false;
       if (MangledName.startswith("floor.find_int_msb.u")) {
         // force uint eval
-        arg = force_uint_value(arg);
+        arg = force_uint_value(arg, BB, BM);
         is_uint = true;
       } else if (MangledName.startswith("floor.find_int_msb.s")) {
         // force int eval
-        arg = force_int_value(arg);
+        arg = force_int_value(arg, BB, BM);
       }
       return BM->addExtInst(
           ((SPIRVTypeInt *)arg->getType())->getSigned() /* force signed */,
@@ -4570,14 +4687,14 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
       auto arg = transValue(CI->getArgOperand(0), BB);
       if (MangledName.startswith("floor.bit_reverse.u")) {
         // force uint eval
-        arg = force_uint_value(arg);
+        arg = force_uint_value(arg, BB, BM);
       }
       return BM->addBitReverseInst(arg->getType(), arg, BB);
     } else if (MangledName.startswith("floor.bit_count.")) {
       auto arg = transValue(CI->getArgOperand(0), BB);
       if (MangledName.startswith("floor.bit_count.u")) {
         // force uint eval
-        arg = force_uint_value(arg);
+        arg = force_uint_value(arg, BB, BM);
       }
       return BM->addBitCountInst(arg->getType(), arg, BB);
     } else if (MangledName.startswith("floor.image_array_load.")) {
@@ -4775,11 +4892,149 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
         // fragment shader can just exit directly
         return BM->addKillInst(BB);
       } else {
-        // kernel or vertex shader can only use a return op
+        // kernel/task/mesh/vertex shader can only use a return op
         return BM->addReturnInst(BB);
       }
+    } else if (MangledName == "floor.mesh.set_output_size") {
+      if (CI->getParent()->getParent()->getCallingConv() !=
+          llvm::CallingConv::FLOOR_MESH) {
+        errs() << "invalid call to " << MangledName
+               << ": this must only be called in mesh shaders\n";
+        return nullptr;
+      }
+      auto args = getArguments(CI);
+      if (args.size() != 2) {
+        errs() << "invalid arg count for mesh set_output_size call: "
+               << MangledName << "\n";
+        return nullptr;
+      }
+      return BM->addSetMeshOutputsInst(
+          force_value_with_sign(args[0], false, BB, BM, this, 32u),
+          force_value_with_sign(args[1], false, BB, BM, this, 32u), BB);
+    } else if (MangledName == "floor.mesh.emit_tasks") {
+      if (CI->getParent()->getParent()->getCallingConv() !=
+          llvm::CallingConv::FLOOR_TASK) {
+        errs() << "invalid call to " << MangledName
+               << ": this must only be called in task shaders\n";
+        return nullptr;
+      }
+      auto args = getArguments(CI);
+      if (args.size() != 3) {
+        errs() << "invalid arg count for mesh emit_tasks call: " << MangledName
+               << "\n";
+        return nullptr;
+      }
+      // this acts as a termination instruction (attributed as noreturn -> need
+      // to ignore next unreachable)
+      ignore_next_unreachable = true;
+      return BM->addEmitMeshTasksInst(
+          force_value_with_sign(args[0], false, BB, BM, this, 32u),
+          force_value_with_sign(args[1], false, BB, BM, this, 32u),
+          force_value_with_sign(args[2], false, BB, BM, this, 32u),
+          mesh.payload /* may be nullptr */, BB);
+    } else if (MangledName == "floor.mesh.set_index.point" ||
+               MangledName == "floor.mesh.set_index.line" ||
+               MangledName == "floor.mesh.set_index.triangle") {
+      if (MangledName == "floor.mesh.set_index.point" &&
+          !mesh.index_info.is_point) {
+        errs() << "invalid call to " << MangledName
+               << ": mesh does not have point topology\n";
+        return nullptr;
+      } else if (MangledName == "floor.mesh.set_index.line" &&
+                 !mesh.index_info.is_line) {
+        errs() << "invalid call to " << MangledName
+               << ": mesh does not have line topology\n";
+        return nullptr;
+      } else if (MangledName == "floor.mesh.set_index.triangle" &&
+                 !mesh.index_info.is_triangle) {
+        errs() << "invalid call to " << MangledName
+               << ": mesh does not have triangle topology\n";
+        return nullptr;
+      }
+      if (!mesh.indices || !mesh.indices_ptr_type) {
+        errs() << "invalid call to " << MangledName
+               << ": no mesh indices exist\n";
+        return nullptr;
+      }
+
+      auto args = transValue(getArguments(CI), BB);
+      if (args.size() != 2) {
+        errs() << "invalid arg count for mesh index call: " << MangledName
+               << "\n";
+        return nullptr;
+      }
+
+      // NOTE: spec is somewhat ambiguous about the signedness of the indices,
+      // so we will keep the default here (most likely signed)
+      auto gep = BM->addAccessChainInst(mesh.indices_ptr_type, mesh.indices,
+                                        {args[0]}, BB, true);
+      return BM->addStoreInst(gep, args[1], {}, BB);
+    } else if (MangledName.startswith("floor.mesh.set_vertex_data.") ||
+               MangledName.startswith("floor.mesh.set_primitive_data.")) {
+      const auto is_vertex_data =
+          MangledName.startswith("floor.mesh.set_vertex_data.");
+      if (CI->arg_size() != 4) {
+        errs() << "invalid arg count for mesh vertex/primitive call: "
+               << MangledName << "\n";
+        return nullptr;
+      }
+      const auto attr_type_constant =
+          dyn_cast_or_null<ConstantInt>(CI->getArgOperand(0));
+      if (!attr_type_constant) {
+        errs() << "invalid attribute type for mesh vertex/primitive call: "
+               << MangledName << "\n";
+        return nullptr;
+      }
+      const auto location_constant =
+          dyn_cast_or_null<ConstantInt>(CI->getArgOperand(1));
+      if (!location_constant) {
+        errs() << "invalid location for mesh vertex/primitive call: "
+               << MangledName << "\n";
+        return nullptr;
+      }
+
+      const auto attr_type_uint = attr_type_constant->getZExtValue();
+      if (attr_type_uint >= uint32_t(MESH_ATTRIBUTE::__MAX_MESH_ATTRIBUTE)) {
+        errs()
+            << "out-of-bounds attribute type for mesh vertex/primitive call: "
+            << MangledName << "\n";
+        return nullptr;
+      }
+      // TODO: actually check/use this?
+      [[maybe_unused]] const auto attr_type = (MESH_ATTRIBUTE)attr_type_uint;
+
+      const auto location = location_constant->getZExtValue();
+      if ((is_vertex_data && location >= mesh.vertex_data.size()) ||
+          (!is_vertex_data && location >= mesh.primitive_data.size())) {
+        errs() << "out-of-bounds location for mesh vertex/primitive call: "
+               << MangledName << "\n";
+        return nullptr;
+      }
+
+      const auto idx = transValue(CI->getArgOperand(2), BB);
+      auto data = transValue(CI->getArgOperand(3), BB);
+
+      // handle signedness
+      if (data->getType()->isTypeVectorOrScalarInt()) {
+        data = force_value_with_sign(
+            data,
+            is_vertex_data ? mesh.vertex_data_signedness[location]
+                           : mesh.primitive_data_signedness[location],
+            BB, BM);
+      }
+
+      auto gep = BM->addAccessChainInst(
+          is_vertex_data ? mesh.vertex_data_ptr_types[location]
+                         : mesh.primitive_data_ptr_types[location],
+          is_vertex_data ? mesh.vertex_data[location]
+                         : mesh.primitive_data[location],
+          {idx}, BB, true);
+      return BM->addStoreInst(gep, data, {}, BB);
     }
     errs() << "unhandled floor func: " << MangledName << "\n";
+    errs().flush();
+    assert(false);
+    return nullptr;
   }
 
   Function *Callee = CI->getCalledFunction();
@@ -5059,7 +5314,8 @@ bool LLVMToSPIRVBase::transGlobalVariables() {
     if ((*I).getLinkage() == GlobalValue::ExternalLinkage ||
         (*I).getLinkage() == GlobalValue::AvailableExternallyLinkage ||
         (*I).getLinkage() == GlobalValue::PrivateLinkage ||
-        (*I).getLinkage() == GlobalValue::ExternalWeakLinkage)
+        (*I).getLinkage() == GlobalValue::ExternalWeakLinkage ||
+        (*I).getLinkage() == GlobalValue::ExternallyRequiredLinkage)
       continue;
 
     if ((*I).getName() == "llvm.global.annotations")
@@ -5253,6 +5509,8 @@ enum class VULKAN_STAGE : uint32_t {
   GEOMETRY = (1u << 3u),
   FRAGMENT = (1u << 4u),
   KERNEL = (1u << 5u),
+  TASK = (1u << 6u),
+  MESH = (1u << 7u),
 };
 static const char *vulkan_stage_to_string(const VULKAN_STAGE &stage) {
   switch (stage) {
@@ -5268,6 +5526,10 @@ static const char *vulkan_stage_to_string(const VULKAN_STAGE &stage) {
     return "fragment";
   case VULKAN_STAGE::KERNEL:
     return "kernel";
+  case VULKAN_STAGE::TASK:
+    return "task";
+  case VULKAN_STAGE::MESH:
+    return "mesh";
   default:
     break;
   }
@@ -5356,6 +5618,8 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
          (global_type.is_constant && !global_type.is_iub))) {
       storage_class = spv::StorageClassStorageBuffer;
     }
+  } else if (global_type.is_task_payload) {
+    storage_class = spv::StorageClassTaskPayloadWorkgroupEXT;
   } else {
     storage_class = spv::StorageClassOutput;
   }
@@ -5416,31 +5680,50 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
       auto spirv_elem_type = transType(elem_type);
       if (!global_type.is_iub) {
         if (!global_type.is_constant) {
-          // this is a SSBO with an unknown size, switch out the top pointer
-          // type with a runtime array type
-          auto rtarr_type = BM->addRuntimeArrayType(spirv_elem_type);
-          std::string enclosing_type_name = "enclose.";
-          if (elem_type->isStructTy()) {
-            enclosing_type_name += elem_type->getStructName().str();
-          } else {
-            std::string type_str = "";
-            llvm::raw_string_ostream type_stream(type_str);
+          if (elem_type->isArrayTy() && global_type.is_arg_buffer) {
+            // direct known-size array within an argument buffer
+            // -> only need to enclose this into a struct
+            std::string enclosing_type_name = "";
+            llvm::raw_string_ostream type_stream(enclosing_type_name);
             elem_type->print(type_stream, false, true);
-            enclosing_type_name += type_stream.str();
-          }
-          auto enclosing_type = BM->openStructType(1, enclosing_type_name);
-          enclosing_type->setMemberType(0, rtarr_type);
-          BM->closeStructType(enclosing_type, false);
-          mapped_type = BM->addPointerType(storage_class, enclosing_type);
 
-          // add required deco
-          enclosing_type->addDecorate(
-              new SPIRVDecorate(DecorationBlock, enclosing_type));
-          enclosing_type->addMemberDecorate(0, spv::DecorationOffset, 0);
-          auto array_stride = M->getDataLayout().getTypeStoreSize(elem_type);
-          add_array_stride_decoration(rtarr_type, array_stride);
-          // TODO: incorrect?
-          // add_array_stride_decoration(mapped_type, array_stride);
+            auto enclosing_st_type =
+                BM->openStructType(1, "enclose." + enclosing_type_name);
+            enclosing_st_type->setMemberType(0, spirv_elem_type);
+            BM->closeStructType(enclosing_st_type, false);
+            mapped_type = BM->addPointerType(storage_class, enclosing_st_type);
+
+            // add required deco
+            enclosing_st_type->addDecorate(
+                new SPIRVDecorate(DecorationBlock, enclosing_st_type));
+            enclosing_st_type->addMemberDecorate(0, spv::DecorationOffset, 0);
+          } else {
+            // this is a SSBO with an unknown size, switch out the top pointer
+            // type with a runtime array type
+            auto rtarr_type = BM->addRuntimeArrayType(spirv_elem_type);
+            std::string enclosing_type_name = "enclose.";
+            if (elem_type->isStructTy()) {
+              enclosing_type_name += elem_type->getStructName().str();
+            } else {
+              std::string type_str = "";
+              llvm::raw_string_ostream type_stream(type_str);
+              elem_type->print(type_stream, false, true);
+              enclosing_type_name += type_stream.str();
+            }
+            auto enclosing_type = BM->openStructType(1, enclosing_type_name);
+            enclosing_type->setMemberType(0, rtarr_type);
+            BM->closeStructType(enclosing_type, false);
+            mapped_type = BM->addPointerType(storage_class, enclosing_type);
+
+            // add required deco
+            enclosing_type->addDecorate(
+                new SPIRVDecorate(DecorationBlock, enclosing_type));
+            enclosing_type->addMemberDecorate(0, spv::DecorationOffset, 0);
+            auto array_stride = M->getDataLayout().getTypeStoreSize(elem_type);
+            add_array_stride_decoration(rtarr_type, array_stride);
+            // TODO: incorrect?
+            // add_array_stride_decoration(mapped_type, array_stride);
+          }
         } else {
           // we need to use the storage buffer storage class
           assert(elem_type->isStructTy() && "SSBO must be a struct");
@@ -5547,15 +5830,9 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
     const auto location_str = md_info.substr(location_pos + 1);
     fbo_location = (uint32_t)strtoull(location_str.c_str(), nullptr, 10);
 
-    // extract data type
-    const auto data_type_pos = md_info.rfind(':', location_pos - 1);
-    assert(data_type_pos != std::string::npos);
-    const auto data_type_str =
-        md_info.substr(data_type_pos + 1, location_pos - data_type_pos - 1);
-
     // float and (signed) int can always be translated directly, unsigned int
     // needs special treatment, b/c llvm doesn't differentiate ints and uints
-    if (data_type_str == "uint") {
+    if (global_type.type_hint && *global_type.type_hint == "uint") {
       assert(GV.getType()->isPointerTy());
       mapped_type = BM->addPointerType(
           storage_class, addSignPreservingLLVMType(
@@ -5563,7 +5840,6 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
     } else {
       mapped_type = transType(GV.getType());
     }
-
   } else if (global_type.is_fbo_depth) {
     // extract depth qualifier
     const auto depth_qual_pos = md_info.rfind(':');
@@ -5581,7 +5857,31 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
     // else: "any"/default, keep as-is
 
     mapped_type = transType(GV.getType());
+  } else if (global_type.is_mesh_output) {
+    assert(mesh.max_vertex_count != ~0u && mesh.max_primitive_count != ~0u);
 
+    // convert the element type on its own first, since we need to take care of
+    // signedness
+    auto elem_type = GV.getType()->getPointerElementType();
+    SPIRVType *spirv_elem_type = nullptr;
+    if (elem_type->isIntOrIntVectorTy() || elem_type->isFPOrFPVectorTy()) {
+      const auto is_signed =
+          (!global_type.type_hint || *global_type.type_hint != "uint");
+      spirv_elem_type = addSignPreservingLLVMType(elem_type, is_signed);
+    } else {
+      spirv_elem_type = transType(elem_type);
+    }
+
+    // create the enclosing array type (per vertex or per primitive)
+    const auto elem_count =
+        (global_type.is_per_primitive ? mesh.max_primitive_count
+                                      : mesh.max_vertex_count);
+    auto spirv_array_type = BM->addArrayType(
+        spirv_elem_type, (SPIRVConstant *)BM->addIntegerConstant(
+                             BM->addIntegerType(32, false), elem_count));
+
+    // finally: put it behind a pointer
+    mapped_type = BM->addPointerType(storage_class, spirv_array_type);
   } else {
     mapped_type = transType(GV.getType());
   }
@@ -5645,8 +5945,18 @@ SPIRVVariable *LLVMToSPIRVBase::emitShaderSPIRVGlobal(
     }
   }
   if (storage_class == spv::StorageClassOutput && global_type.is_flat &&
-      F.getCallingConv() == llvm::CallingConv::FLOOR_VERTEX) {
+      (F.getCallingConv() == llvm::CallingConv::FLOOR_VERTEX ||
+       F.getCallingConv() == llvm::CallingConv::FLOOR_MESH)) {
     BVar->addDecorate(new SPIRVDecorate(DecorationFlat, BVar));
+  }
+
+  // handle per-primitive input/output
+  if (global_type.is_per_primitive &&
+      ((storage_class == spv::StorageClassOutput &&
+        F.getCallingConv() == llvm::CallingConv::FLOOR_MESH) ||
+       (storage_class == spv::StorageClassInput &&
+        F.getCallingConv() == llvm::CallingConv::FLOOR_FRAGMENT))) {
+    BVar->addDecorate(new SPIRVDecorate(DecorationPerPrimitiveEXT, BVar));
   }
 
   return BVar;
@@ -5858,12 +6168,10 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
 
   // we're only interested in shader entry points here
   // TODO: cleanup + move to functions
+  const auto has_mesh_shading_support =
+      M->getNamedMetadata("floor.vulkan_mesh_shading");
   if (SrcLang == SourceLanguageGLSL &&
-      (F->getCallingConv() == llvm::CallingConv::FLOOR_KERNEL ||
-       F->getCallingConv() == llvm::CallingConv::FLOOR_VERTEX ||
-       F->getCallingConv() == llvm::CallingConv::FLOOR_FRAGMENT ||
-       F->getCallingConv() == llvm::CallingConv::FLOOR_TESS_CONTROL ||
-       F->getCallingConv() == llvm::CallingConv::FLOOR_TESS_EVAL)) {
+      CallingConv::isFloorEntryPoint(F->getCallingConv())) {
     VULKAN_STAGE stage;
     switch (F->getCallingConv()) {
     case llvm::CallingConv::FLOOR_VERTEX:
@@ -5881,6 +6189,19 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
     case llvm::CallingConv::FLOOR_KERNEL:
       stage = VULKAN_STAGE::KERNEL;
       break;
+    case llvm::CallingConv::FLOOR_TASK:
+    case llvm::CallingConv::FLOOR_MESH: {
+      if (!has_mesh_shading_support) {
+        errs() << "task/mesh shader entry point, but mesh shading is not "
+                  "supported\n";
+        assert(false);
+        return;
+      }
+      stage = (F->getCallingConv() == llvm::CallingConv::FLOOR_TASK
+                   ? VULKAN_STAGE::TASK
+                   : VULKAN_STAGE::MESH);
+      break;
+    }
     default:
       return;
     }
@@ -5900,6 +6221,12 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
       BM->addExtension(ExtensionID::SPV_KHR_subgroup_uniform_control_flow);
       BF->addExecutionMode(new SPIRVExecutionMode(
           BF, ExecutionModeSubgroupUniformControlFlowKHR));
+    }
+
+    if (has_mesh_shading_support &&
+        (stage == VULKAN_STAGE::TASK || stage == VULKAN_STAGE::MESH ||
+         stage == VULKAN_STAGE::FRAGMENT)) {
+      BM->addExtension(ExtensionID::SPV_EXT_mesh_shader);
     }
 
     const std::string func_name = F->getName().str();
@@ -5945,16 +6272,10 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           {"point_size", spv::BuiltInPointSize},
           {"clip_distance", spv::BuiltInClipDistance},
           {"cull_distance", spv::BuiltInCullDistance},
-          //{ "vertex_id", spv::BuiltInVertexId }, // unsupported in vulkan
-          //{ "instance_id", spv::BuiltInInstanceId }, // unsupported in vulkan
           {"primitive_id", spv::BuiltInPrimitiveId},
           {"invocation_id", spv::BuiltInInvocationId},
           {"layer", spv::BuiltInLayer},
           {"viewport_index", spv::BuiltInViewportIndex},
-          {"tess_level_outer", spv::BuiltInTessLevelOuter},
-          {"tess_level_inner", spv::BuiltInTessLevelInner},
-          {"tess_coord", spv::BuiltInTessCoord},
-          {"patch_vertices", spv::BuiltInPatchVertices},
           {"frag_coord", spv::BuiltInFragCoord},
           {"point_coord", spv::BuiltInPointCoord},
           {"front_facing", spv::BuiltInFrontFacing},
@@ -5964,21 +6285,7 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           {"frag_depth", spv::BuiltInFragDepth},
           {"helper_invocation", spv::BuiltInHelperInvocation},
           {"num_workgroups", spv::BuiltInNumWorkgroups},
-          //{ "workgroup_size", spv::BuiltInWorkgroupSize }, // NOTE: must be a
-          // constant or spec constant
           {"workgroup_id", spv::BuiltInWorkgroupId},
-          //{"local_invocation_id", spv::BuiltInLocalInvocationId},
-          //{"global_invocation_id", spv::BuiltInGlobalInvocationId},
-          // OpenCL-only:
-          //{ "local_invocation_index", spv::BuiltInLocalInvocationIndex },
-          //{ "work_dim", spv::BuiltInWorkDim },
-          //{ "global_size", spv::BuiltInGlobalSize },
-          //{ "enqueued_workgroup_size", spv::BuiltInEnqueuedWorkgroupSize },
-          //{ "global_offset", spv::BuiltInGlobalOffset },
-          //{ "global_linear_id", spv::BuiltInGlobalLinearId },
-          //{ "subgroup_max_size", spv::BuiltInSubgroupMaxSize },
-          //{ "num_enqueued_subgroups", spv::BuiltInNumEnqueuedSubgroups },
-          // spv::BuiltInSubgroupLocalInvocationId },
           {"vertex_index", spv::BuiltInVertexIndex},
           {"base_vertex_index", spv::BuiltInBaseVertex},
           {"instance_index", spv::BuiltInInstanceIndex},
@@ -5989,6 +6296,7 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           {"sub_group_local_id", spv::BuiltInSubgroupLocalInvocationId},
           {"sub_group_size", spv::BuiltInSubgroupSize},
           {"num_sub_groups", spv::BuiltInNumSubgroups},
+          {"culled", spv::BuiltInCullPrimitiveEXT},
       };
       const auto iter = builtin_lut.find(str);
       if (iter == builtin_lut.end()) {
@@ -6002,131 +6310,55 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
       // NOTE: the non-listed/commented ones are unsupported in vulkan
       static const std::unordered_map<spv::BuiltIn, VULKAN_STAGE>
           builtin_validity_input_lut{
-              {spv::BuiltInPosition, (VULKAN_STAGE::TESSELLATION_CONTROL |
-                                      VULKAN_STAGE::TESSELLATION_EVALUATION |
-                                      VULKAN_STAGE::GEOMETRY)},
-              {spv::BuiltInPointSize, (VULKAN_STAGE::TESSELLATION_CONTROL |
-                                       VULKAN_STAGE::TESSELLATION_EVALUATION |
-                                       VULKAN_STAGE::GEOMETRY)},
-              {spv::BuiltInClipDistance,
-               (VULKAN_STAGE::FRAGMENT | VULKAN_STAGE::TESSELLATION_CONTROL |
-                VULKAN_STAGE::TESSELLATION_EVALUATION |
-                VULKAN_STAGE::GEOMETRY)},
-              {spv::BuiltInCullDistance,
-               (VULKAN_STAGE::FRAGMENT | VULKAN_STAGE::TESSELLATION_CONTROL |
-                VULKAN_STAGE::TESSELLATION_EVALUATION |
-                VULKAN_STAGE::GEOMETRY)},
-              //{ spv::BuiltInVertexId, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInInstanceId, VULKAN_STAGE::NONE },
-              {spv::BuiltInPrimitiveId,
-               VULKAN_STAGE::GEOMETRY | VULKAN_STAGE::FRAGMENT},
-              {spv::BuiltInInvocationId,
-               (VULKAN_STAGE::TESSELLATION_CONTROL | VULKAN_STAGE::GEOMETRY)},
+              {spv::BuiltInClipDistance, VULKAN_STAGE::FRAGMENT},
+              {spv::BuiltInCullDistance, VULKAN_STAGE::FRAGMENT},
+              {spv::BuiltInPrimitiveId, VULKAN_STAGE::FRAGMENT},
               {spv::BuiltInLayer, VULKAN_STAGE::FRAGMENT},
               {spv::BuiltInViewportIndex, VULKAN_STAGE::FRAGMENT},
-              {spv::BuiltInTessLevelOuter,
-               VULKAN_STAGE::TESSELLATION_EVALUATION},
-              {spv::BuiltInTessLevelInner,
-               VULKAN_STAGE::TESSELLATION_EVALUATION},
-              {spv::BuiltInTessCoord, VULKAN_STAGE::TESSELLATION_EVALUATION},
-              {spv::BuiltInPatchVertices,
-               (VULKAN_STAGE::TESSELLATION_CONTROL |
-                VULKAN_STAGE::TESSELLATION_EVALUATION)},
               {spv::BuiltInFragCoord, VULKAN_STAGE::FRAGMENT},
               {spv::BuiltInPointCoord, VULKAN_STAGE::FRAGMENT},
               {spv::BuiltInFrontFacing, VULKAN_STAGE::FRAGMENT},
               {spv::BuiltInSampleId, VULKAN_STAGE::FRAGMENT},
               {spv::BuiltInSamplePosition, VULKAN_STAGE::FRAGMENT},
               {spv::BuiltInSampleMask, VULKAN_STAGE::FRAGMENT},
-              {spv::BuiltInFragDepth, VULKAN_STAGE::NONE},
               {spv::BuiltInHelperInvocation, VULKAN_STAGE::FRAGMENT},
-              {spv::BuiltInNumWorkgroups, VULKAN_STAGE::KERNEL},
-              {spv::BuiltInWorkgroupSize,
-               VULKAN_STAGE::NONE}, // NOTE: must be a constant or spec constant
-              {spv::BuiltInWorkgroupId, VULKAN_STAGE::KERNEL},
-              {spv::BuiltInLocalInvocationId, VULKAN_STAGE::KERNEL},
-              {spv::BuiltInGlobalInvocationId, VULKAN_STAGE::KERNEL},
-              //{ spv::BuiltInLocalInvocationIndex, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInWorkDim, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInGlobalSize, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInEnqueuedWorkgroupSize, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInGlobalOffset, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInGlobalLinearId, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInSubgroupMaxSize, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInNumEnqueuedSubgroups, VULKAN_STAGE::NONE },
+              {spv::BuiltInNumWorkgroups,
+               VULKAN_STAGE::KERNEL | VULKAN_STAGE::TASK | VULKAN_STAGE::MESH},
+              {spv::BuiltInWorkgroupId,
+               VULKAN_STAGE::KERNEL | VULKAN_STAGE::TASK | VULKAN_STAGE::MESH},
+              {spv::BuiltInLocalInvocationId,
+               VULKAN_STAGE::KERNEL | VULKAN_STAGE::TASK | VULKAN_STAGE::MESH},
+              {spv::BuiltInGlobalInvocationId,
+               VULKAN_STAGE::KERNEL | VULKAN_STAGE::TASK | VULKAN_STAGE::MESH},
               {spv::BuiltInVertexIndex, VULKAN_STAGE::VERTEX},
               {spv::BuiltInBaseVertex, VULKAN_STAGE::VERTEX},
-              {spv::BuiltInInstanceIndex,
-               VULKAN_STAGE::VERTEX | VULKAN_STAGE::TESSELLATION_EVALUATION},
-              {spv::BuiltInBaseInstance,
-               VULKAN_STAGE::VERTEX | VULKAN_STAGE::TESSELLATION_EVALUATION},
+              {spv::BuiltInInstanceIndex, VULKAN_STAGE::VERTEX},
+              {spv::BuiltInBaseInstance, VULKAN_STAGE::VERTEX},
               {spv::BuiltInViewIndex,
-               (VULKAN_STAGE::VERTEX | VULKAN_STAGE::TESSELLATION_CONTROL |
-                VULKAN_STAGE::TESSELLATION_EVALUATION | VULKAN_STAGE::GEOMETRY |
+               (VULKAN_STAGE::VERTEX | VULKAN_STAGE::MESH |
                 VULKAN_STAGE::FRAGMENT)},
               {spv::BuiltInBaryCoordKHR, VULKAN_STAGE::FRAGMENT},
-              {spv::BuiltInSubgroupId, VULKAN_STAGE::KERNEL},
-              {spv::BuiltInSubgroupLocalInvocationId, VULKAN_STAGE::KERNEL},
-              {spv::BuiltInSubgroupSize, VULKAN_STAGE::KERNEL},
-              {spv::BuiltInNumSubgroups, VULKAN_STAGE::KERNEL},
+              {spv::BuiltInSubgroupId,
+               VULKAN_STAGE::KERNEL | VULKAN_STAGE::TASK | VULKAN_STAGE::MESH},
+              {spv::BuiltInSubgroupLocalInvocationId,
+               VULKAN_STAGE::KERNEL | VULKAN_STAGE::TASK | VULKAN_STAGE::MESH},
+              {spv::BuiltInSubgroupSize,
+               VULKAN_STAGE::KERNEL | VULKAN_STAGE::TASK | VULKAN_STAGE::MESH},
+              {spv::BuiltInNumSubgroups,
+               VULKAN_STAGE::KERNEL | VULKAN_STAGE::TASK | VULKAN_STAGE::MESH},
           };
       static const std::unordered_map<spv::BuiltIn, VULKAN_STAGE>
           builtin_validity_output_lut{
               {spv::BuiltInPosition,
-               (VULKAN_STAGE::VERTEX | VULKAN_STAGE::TESSELLATION_CONTROL |
-                VULKAN_STAGE::TESSELLATION_EVALUATION |
-                VULKAN_STAGE::GEOMETRY)},
+               (VULKAN_STAGE::VERTEX | VULKAN_STAGE::MESH)},
               {spv::BuiltInPointSize,
-               (VULKAN_STAGE::VERTEX | VULKAN_STAGE::TESSELLATION_CONTROL |
-                VULKAN_STAGE::TESSELLATION_EVALUATION |
-                VULKAN_STAGE::GEOMETRY)},
-              {spv::BuiltInClipDistance,
-               (VULKAN_STAGE::VERTEX | VULKAN_STAGE::TESSELLATION_CONTROL |
-                VULKAN_STAGE::TESSELLATION_EVALUATION |
-                VULKAN_STAGE::GEOMETRY)},
-              {spv::BuiltInCullDistance,
-               (VULKAN_STAGE::VERTEX | VULKAN_STAGE::TESSELLATION_CONTROL |
-                VULKAN_STAGE::TESSELLATION_EVALUATION |
-                VULKAN_STAGE::GEOMETRY)},
-              //{ spv::BuiltInVertexId, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInInstanceId, VULKAN_STAGE::NONE },
-              {spv::BuiltInPrimitiveId,
-               (VULKAN_STAGE::FRAGMENT | VULKAN_STAGE::TESSELLATION_CONTROL |
-                VULKAN_STAGE::TESSELLATION_EVALUATION |
-                VULKAN_STAGE::GEOMETRY)},
-              {spv::BuiltInInvocationId, VULKAN_STAGE::NONE},
-              {spv::BuiltInLayer, VULKAN_STAGE::GEOMETRY},
-              {spv::BuiltInViewportIndex, VULKAN_STAGE::GEOMETRY},
-              {spv::BuiltInTessLevelOuter, VULKAN_STAGE::TESSELLATION_CONTROL},
-              {spv::BuiltInTessLevelInner, VULKAN_STAGE::TESSELLATION_CONTROL},
-              {spv::BuiltInTessCoord, VULKAN_STAGE::NONE},
-              {spv::BuiltInPatchVertices, VULKAN_STAGE::NONE},
-              {spv::BuiltInFragCoord, VULKAN_STAGE::NONE},
-              {spv::BuiltInPointCoord, VULKAN_STAGE::NONE},
-              {spv::BuiltInFrontFacing, VULKAN_STAGE::NONE},
-              {spv::BuiltInSampleId, VULKAN_STAGE::NONE},
-              {spv::BuiltInSamplePosition, VULKAN_STAGE::NONE},
+               (VULKAN_STAGE::VERTEX | VULKAN_STAGE::MESH)},
+              {spv::BuiltInClipDistance, VULKAN_STAGE::VERTEX},
+              {spv::BuiltInCullDistance, VULKAN_STAGE::VERTEX},
+              {spv::BuiltInPrimitiveId, VULKAN_STAGE::FRAGMENT},
               {spv::BuiltInSampleMask, VULKAN_STAGE::FRAGMENT},
               {spv::BuiltInFragDepth, VULKAN_STAGE::FRAGMENT},
-              {spv::BuiltInHelperInvocation, VULKAN_STAGE::NONE},
-              {spv::BuiltInNumWorkgroups, VULKAN_STAGE::NONE},
-              {spv::BuiltInWorkgroupSize, VULKAN_STAGE::NONE},
-              {spv::BuiltInWorkgroupId, VULKAN_STAGE::NONE},
-              {spv::BuiltInLocalInvocationId, VULKAN_STAGE::NONE},
-              {spv::BuiltInGlobalInvocationId, VULKAN_STAGE::NONE},
-              //{ spv::BuiltInLocalInvocationIndex, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInWorkDim, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInGlobalSize, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInEnqueuedWorkgroupSize, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInGlobalOffset, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInGlobalLinearId, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInSubgroupMaxSize, VULKAN_STAGE::NONE },
-              //{ spv::BuiltInNumEnqueuedSubgroups, VULKAN_STAGE::NONE },
-              {spv::BuiltInVertexIndex, VULKAN_STAGE::NONE},
-              {spv::BuiltInBaseVertex, VULKAN_STAGE::NONE},
-              {spv::BuiltInInstanceIndex, VULKAN_STAGE::NONE},
-              {spv::BuiltInBaseInstance, VULKAN_STAGE::NONE},
-              {spv::BuiltInViewIndex, VULKAN_STAGE::NONE},
+              {spv::BuiltInCullPrimitiveEXT, VULKAN_STAGE::MESH},
           };
 
       if (is_input) {
@@ -6158,20 +6390,24 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
     switch (stage) { // put each stage into a different set
     case VULKAN_STAGE::KERNEL:
       desc_set = 1;
-      arg_buffer_desc_set_offset = 2; // [2, 15] or [2, 6]
+      arg_buffer_desc_set_offset = 2; // high: [2, 15] or low: [2, 6]
       break;
     case VULKAN_STAGE::VERTEX:
-    case VULKAN_STAGE::TESSELLATION_EVALUATION:
       desc_set = 1;
-      arg_buffer_desc_set_offset = 3; // [3, 8] or [3, 4]
+      arg_buffer_desc_set_offset = 3; // high: [3, 8] or low: [3, 4]
+      break;
+    case VULKAN_STAGE::TASK:
+      desc_set = 1;
+      arg_buffer_desc_set_offset = 4; // high: [4, 5] or low: N/A
+      break;
+    case VULKAN_STAGE::MESH:
+      desc_set = 3;
+      arg_buffer_desc_set_offset = 6; // high: [6, 8] or low: N/A
       break;
     case VULKAN_STAGE::FRAGMENT:
       desc_set = 2;
-      arg_buffer_desc_set_offset = (!low_dsc ? 9 : 5); // [9, 14] or [5, 6]
-      break;
-    case VULKAN_STAGE::TESSELLATION_CONTROL:
-      desc_set = 1;                     // reuse same descriptor set
-      arg_buffer_desc_set_offset = ~0u; // not supported here
+      arg_buffer_desc_set_offset =
+          (!low_dsc ? 9 : 5); // high: [9, 14] or low: [5, 6]
       break;
     case VULKAN_STAGE::GEOMETRY:
     default:
@@ -6181,7 +6417,15 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
     for (Argument &arg : F->args()) {
       llvm::Type *arg_type = arg.getType();
       const auto arg_name = arg.getName();
+      bool ignore_arg = false;
 
+      //
+      const auto arg_buffer_attr = F->getAttributeAtIndex(
+          llvm::AttributeList::FirstArgIndex + arg.getArgNo(),
+          "vulkan_arg_buffer");
+      const auto is_arg_buffer = (arg_buffer_attr.getRawPointer() != nullptr);
+
+      //
       const auto &arg_md_in = md_data_input[input_arg_idx];
       const auto md_prefix_split_pos = arg_md_in.find(':');
       std::string md_prefix = (md_prefix_split_pos != std::string::npos
@@ -6196,8 +6440,15 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
       uint32_t *arg_desc_set = &desc_set;
       uint32_t *arg_idx = &uniform_arg_idx;
 
+      //
+      spirv_global_io_type global_type{
+          .is_arg_buffer = is_arg_buffer,
+      };
+
       // argument buffer pre-handling
       if (md_prefix == "argbuf") {
+        assert(is_arg_buffer);
+
         // extract argument buffer index
         const auto arg_buf_idx_split_pos = md_info.find(':');
         const auto actual_md_prefix_split_pos =
@@ -6249,7 +6500,6 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           // insane alignment/offset requirements, so always make it a SSBO,
           // which has less restrictions
           // (TODO: could also make this a push constant later on)
-          spirv_global_io_type global_type;
           global_type.is_constant = true;
           global_type.is_uniform = true;
           global_type.is_read_only = true;
@@ -6268,7 +6518,6 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           if (!elem_type->isSized()) {
             // -> image
             assert(ptr_as == SPIRAS_Uniform);
-            spirv_global_io_type global_type;
             global_type.is_image = true;
             global_type.is_constant = true;
             global_type.is_uniform = true;
@@ -6280,7 +6529,6 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           } else {
             // -> SSBO
             assert(md_prefix != "iub");
-            spirv_global_io_type global_type;
             global_type.is_uniform = true;
             global_type.is_ssbo_array = (md_prefix == "ssbo_array");
             global_type.is_read_only = arg.onlyReadsMemory();
@@ -6372,7 +6620,6 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           }
 
           // -> image/buffer array
-          spirv_global_io_type global_type;
           global_type.is_image = is_image;
           global_type.is_constant = true;
           global_type.is_uniform = true;
@@ -6382,6 +6629,92 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
                                SPIRAS_Uniform, global_type, md_info);
           // replace with address space change (private to uniform)
           arg.replaceAllUsesWith(GV, true);
+        } else if (arg_type->getPointerElementType()->isMeshType()) {
+          assert(md_prefix == "mesh");
+
+          // -> ignore variable itself, but emit needed mesh output GVs
+          assert(arg.users().empty()); // should have no users at this point
+          ignore_arg = true;
+
+          const auto vtx_count_split_pos = md_info.find(':');
+          const auto prim_count_split_pos =
+              md_info.find(':', vtx_count_split_pos + 1);
+          if (vtx_count_split_pos == std::string::npos ||
+              prim_count_split_pos == std::string::npos) {
+            assert(false && "invalid mesh metadata");
+          }
+
+          const auto vtx_count_str = md_info.substr(0, vtx_count_split_pos);
+          const auto prim_count_str =
+              md_info.substr(vtx_count_split_pos + 1,
+                             prim_count_split_pos - vtx_count_split_pos - 1);
+          const auto topo_str = md_info.substr(prim_count_split_pos + 1);
+
+          const auto vtx_count = strtoull(vtx_count_str.c_str(), nullptr, 10);
+          const auto prim_count = strtoull(prim_count_str.c_str(), nullptr, 10);
+          BF->addExecutionMode(new SPIRVExecutionMode(
+              BF, spv::ExecutionModeOutputVertices, vtx_count));
+          BF->addExecutionMode(new SPIRVExecutionMode(
+              BF, spv::ExecutionModeOutputPrimitivesEXT, prim_count));
+          mesh.max_vertex_count = vtx_count;
+          mesh.max_primitive_count = prim_count;
+
+          // create indices GV
+          spirv_global_io_type indices_global_type{};
+          indices_global_type.is_builtin = true;
+          llvm::Type *index_type = nullptr;
+          spv::BuiltIn builtin_type{};
+          if (topo_str == "triangle") {
+            mesh.index_info.is_triangle = true;
+            BF->addExecutionMode(new SPIRVExecutionMode(
+                BF, spv::ExecutionModeOutputTrianglesEXT));
+            builtin_type = spv::BuiltIn::BuiltInPrimitiveTriangleIndicesEXT;
+            index_type =
+                llvm::FixedVectorType::get(llvm::Type::getInt32Ty(*Ctx), 3);
+          } else if (topo_str == "line") {
+            mesh.index_info.is_line = true;
+            BF->addExecutionMode(
+                new SPIRVExecutionMode(BF, spv::ExecutionModeOutputLinesEXT));
+            builtin_type = spv::BuiltIn::BuiltInPrimitiveLineIndicesEXT;
+            index_type =
+                llvm::FixedVectorType::get(llvm::Type::getInt32Ty(*Ctx), 2);
+          } else if (topo_str == "point") {
+            mesh.index_info.is_point = true;
+            BF->addExecutionMode(
+                new SPIRVExecutionMode(BF, spv::ExecutionModeOutputPoints));
+            builtin_type = spv::BuiltIn::BuiltInPrimitivePointIndicesEXT;
+            index_type = llvm::Type::getInt32Ty(*Ctx);
+          } else {
+            assert(false && "invalid mesh topo");
+          }
+          auto indices_type = llvm::ArrayType::get(index_type, prim_count);
+          mesh.indices_ptr_type = BM->addPointerType(spv::StorageClassOutput,
+                                                     transType(index_type));
+
+          GlobalVariable *GV = nullptr;
+          std::tie(GV, mesh.indices) =
+              emitShaderGlobal(*F, BF, "indices", indices_type, SPIRAS_Output,
+                               indices_global_type, "", builtin_type);
+
+          // NOTE: mesh vertex/primitive output is handled via existing
+          // stage_output
+        } else if (arg_type->getPointerElementType()
+                       ->isMeshGridPropertiesType()) {
+          // -> ignore
+          assert(arg.users().empty()); // should have no users at this point
+          ignore_arg = true;
+        } else if (arg_type->getPointerAddressSpace() ==
+                   SPIRAS_TaskPayloadWorkgroup) {
+          spirv_global_io_type global_type{};
+          global_type.is_task_payload = true;
+          GlobalVariable *GV = nullptr;
+          std::tie(GV, uniform_var) = emitShaderGlobal(
+              *F, BF, arg_name.str(), elem_type, SPIRAS_TaskPayloadWorkgroup,
+              global_type, md_info);
+          arg.replaceAllUsesWith(GV, true);
+          mesh.payload = uniform_var;
+          // for purposes of setting a descriptor set + binding
+          ignore_arg = true;
         } else if (arg_type->getPointerAddressSpace() == SPIRAS_Local) {
           // -> local memory (TODO: implement this)
           llvm_unreachable("local memory parameters are not yet implemented");
@@ -6393,11 +6726,13 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
         }
 
         //
-        uniform_var->addDecorate(new SPIRVDecorate(DecorationDescriptorSet,
-                                                   uniform_var, *arg_desc_set));
-        uniform_var->addDecorate(
-            new SPIRVDecorate(DecorationBinding, uniform_var, *arg_idx));
-        ++*arg_idx;
+        if (!ignore_arg) {
+          uniform_var->addDecorate(new SPIRVDecorate(
+              DecorationDescriptorSet, uniform_var, *arg_desc_set));
+          uniform_var->addDecorate(
+              new SPIRVDecorate(DecorationBinding, uniform_var, *arg_idx));
+          ++*arg_idx;
+        }
       } else {
         if (md_prefix == "builtin") {
           // -> special input variable
@@ -6412,7 +6747,6 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
               is_builtin_valid_in_stage(builtin.first, stage, true /* input */);
           if (is_valid) {
             llvm::Type *elem_type = arg_type->getPointerElementType();
-            spirv_global_io_type global_type;
             global_type.is_input = true;
             global_type.is_builtin = true;
             auto [repl_var, _] = emitShaderGlobal(
@@ -6429,15 +6763,26 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           }
         } else if (md_prefix == "stage" || md_prefix == "") {
           // -> stage input
-          spirv_global_io_type global_type;
+          if (md_prefix == "stage") {
+            // trim type info if present
+            const auto type_pos = md_info.find(':');
+            if (type_pos != std::string::npos) {
+              md_info = md_info.substr(type_pos + 1);
+            }
+          }
+
+          spirv_global_io_type global_type{};
           global_type.is_input = true;
           global_type.is_read_only = true;
           if (md_prefix != "stage" ||
-              (md_prefix == "stage" && md_info == "flat")) {
+              (md_prefix == "stage" && md_info == "none") ||
+              (md_prefix == "stage" && md_info == "flat") ||
+              (md_prefix == "stage" && md_info == "per_primitive")) {
             // only emit this input if it is an actual input (not a builtin)
             global_type.set_location = true;
             global_type.location = input_location++;
             global_type.is_flat = (md_info == "flat");
+            global_type.is_per_primitive = (md_info == "per_primitive");
 
             auto [repl_var, _] =
                 emitShaderGlobal(*F, BF, arg_name.str(), arg_type, SPIRAS_Input,
@@ -6458,7 +6803,6 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
                 // -> replace uses with builtin frag coord
                 llvm::Type *elem_type =
                     FixedVectorType::get(Type::getFloatTy(M->getContext()), 4u);
-                spirv_global_io_type global_type;
                 global_type.is_input = true;
                 global_type.is_builtin = true;
                 auto [repl_var, _] = emitShaderGlobal(
@@ -6494,8 +6838,8 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
     // NOTE: inputs, builtins and uniforms are handled on the SPIRVLib side
     // above, outputs are however already handled on the LLVM side (VulkanFinal
     // pass) and thus have no SPIRVVariable mapping yet and have not been added
-    // to the entry point i/o set yet
-    // -> create SPIRVVariable for outputs + add them to the entry point i/o set
+    // to the entry point I/O set yet
+    // -> create SPIRVVariable for outputs + add them to the entry point I/O set
     // in here
     const std::string output_var_name_stub = func_name + ".vulkan_output.";
     uint32_t output_arg_idx = 0, output_location = 0;
@@ -6505,47 +6849,58 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
 
         assert(output_arg_idx < md_data_output.size() &&
                "invalid/incomplete output metadata");
-        const auto md_prefix_split_pos =
-            md_data_output[output_arg_idx].find(':');
-        const std::string md_prefix =
-            (md_prefix_split_pos != std::string::npos
-                 ? md_data_output[output_arg_idx].substr(0, md_prefix_split_pos)
-                 : "");
-        const std::string md_info =
-            (md_prefix_split_pos != std::string::npos
-                 ? md_data_output[output_arg_idx].substr(md_prefix_split_pos +
-                                                         1)
-                 : md_data_output[output_arg_idx]);
+        std::string md_prefix;
+        std::string md_type;
+        std::string md_info = md_data_output[output_arg_idx];
+        if (const auto md_prefix_split_pos = md_info.find(':');
+            md_prefix_split_pos != std::string::npos) {
+          md_prefix = md_info.substr(0, md_prefix_split_pos);
+          md_info = md_info.substr(md_prefix_split_pos + 1);
+        }
+        if (const auto md_type_split_pos = md_info.find(':');
+            md_type_split_pos != std::string::npos) {
+          md_type = md_info.substr(0, md_type_split_pos);
+          md_info = md_info.substr(md_type_split_pos + 1);
+        }
+
+        SPIRVVariable *spirv_global = nullptr;
+        spirv_global_io_type global_type{
+            .is_mesh_output = (stage == VULKAN_STAGE::MESH),
+            .type_hint = (!md_type.empty() ? &md_type : nullptr),
+        };
 
         if (md_prefix != "") {
-          // -> flat shaded output
-          if (md_prefix == "stage" && md_info == "flat") {
-            spirv_global_io_type global_type;
+          // -> flat shaded / per-primitive output
+          if (md_prefix == "stage" &&
+              (md_info == "flat" || md_info == "per_primitive" ||
+               md_info == "none")) {
             global_type.is_write_only = true;
             global_type.set_location = true;
             global_type.location = output_location++;
-            global_type.is_flat = true;
-            emitShaderSPIRVGlobal(*F, BF, GV, output_name.str(), SPIRAS_Output,
-                                  global_type, md_info);
+            global_type.is_flat = (md_info == "flat");
+            global_type.is_per_primitive = (md_info == "per_primitive");
+            spirv_global =
+                emitShaderSPIRVGlobal(*F, BF, GV, output_name.str(),
+                                      SPIRAS_Output, global_type, md_info);
           }
           // -> fbo color
           else if (md_prefix == "stage" &&
                    md_info.find("fbo_output:") != std::string::npos) {
-            spirv_global_io_type global_type;
             global_type.is_write_only = true;
             global_type.is_fbo_color = true;
-            emitShaderSPIRVGlobal(*F, BF, GV, output_name.str(), SPIRAS_Output,
-                                  global_type, md_info);
+            spirv_global =
+                emitShaderSPIRVGlobal(*F, BF, GV, output_name.str(),
+                                      SPIRAS_Output, global_type, md_info);
           }
           // -> fbo depth
           else if (md_prefix == "stage" &&
                    md_info.find("fbo_depth:") != std::string::npos) {
-            spirv_global_io_type global_type;
             global_type.is_write_only = true;
             global_type.is_fbo_depth = true;
             global_type.is_builtin = true;
-            emitShaderSPIRVGlobal(*F, BF, GV, output_name.str(), SPIRAS_Output,
-                                  global_type, md_info, spv::BuiltInFragDepth);
+            spirv_global = emitShaderSPIRVGlobal(
+                *F, BF, GV, output_name.str(), SPIRAS_Output, global_type,
+                md_info, spv::BuiltInFragDepth);
             // since we explicitly write depth, flag the function as
             // "DepthReplacing"
             BF->addExecutionMode(
@@ -6561,12 +6916,12 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
             const auto is_valid = is_builtin_valid_in_stage(
                 builtin.first, stage, false /* output */);
             if (is_valid) {
-              spirv_global_io_type global_type;
               global_type.is_builtin = true;
               global_type.is_write_only = true;
-              emitShaderSPIRVGlobal(*F, BF, GV, output_name.str(),
-                                    SPIRAS_Output, global_type, md_info,
-                                    builtin.first);
+              global_type.is_per_primitive = (md_info == "culled");
+              spirv_global = emitShaderSPIRVGlobal(
+                  *F, BF, GV, output_name.str(), SPIRAS_Output, global_type,
+                  md_info, builtin.first);
             } else {
               // TODO: should catch this earlier
               errs() << "output builtin \"" << md_info
@@ -6581,13 +6936,32 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
         }
         // -> normal output
         else {
-          spirv_global_io_type global_type;
           global_type.is_write_only = true;
           global_type.set_location = true;
           global_type.location = output_location++;
-          emitShaderSPIRVGlobal(*F, BF, GV, output_name.str(), SPIRAS_Output,
-                                global_type, md_info);
+          spirv_global =
+              emitShaderSPIRVGlobal(*F, BF, GV, output_name.str(),
+                                    SPIRAS_Output, global_type, md_info);
         }
+
+        if (stage == VULKAN_STAGE::MESH) {
+          auto data_ptr_type = BM->addPointerType(spv::StorageClassOutput,
+                                                  spirv_global->getType()
+                                                      ->getPointerElementType()
+                                                      ->getArrayElementType());
+          const auto is_signed = (md_type != "uint");
+          if (md_prefix == "stage" &&
+              (md_info == "per_primitive" || md_info == "culled")) {
+            mesh.primitive_data.emplace_back(spirv_global);
+            mesh.primitive_data_ptr_types.emplace_back(data_ptr_type);
+            mesh.primitive_data_signedness.emplace_back(is_signed);
+          } else {
+            mesh.vertex_data.emplace_back(spirv_global);
+            mesh.vertex_data_ptr_types.emplace_back(data_ptr_type);
+            mesh.vertex_data_signedness.emplace_back(is_signed);
+          }
+        }
+
         ++output_arg_idx;
       }
     }
@@ -6608,7 +6982,10 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
     }
 
     // set compute shader constant work-group size
-    if (F->getCallingConv() == llvm::CallingConv::FLOOR_KERNEL) {
+    if (const auto CC = F->getCallingConv();
+        CC == llvm::CallingConv::FLOOR_KERNEL ||
+        CC == llvm::CallingConv::FLOOR_TASK ||
+        CC == llvm::CallingConv::FLOOR_MESH) {
       if (MDNode *WGSize = F->getMetadata(kSPIR2MD::WGSize); WGSize) {
         // -> constant/required user-specified local/work-group size
         uint32_t constant_wg_size_vals[3]{1, 1, 1};
@@ -6623,7 +7000,9 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
         auto gv_wg_size = M->getNamedGlobal(global_name);
 
         // NOTE: 128 is the minimum value that has to be supported in the X dim
-        uint32_t default_wg_size_vals[3]{128, 1, 1};
+        // NOTE: using 32 for task/mesh shaders as this is a recommended size
+        uint32_t default_wg_size_vals[3]{
+            (CC == llvm::CallingConv::FLOOR_KERNEL ? 128u : 32u), 1u, 1u};
 
         auto uint_type = BM->addIntegerType(32, false);
         auto uint3_type = BM->addVectorType(uint_type, 3);
@@ -7241,7 +7620,9 @@ bool LLVMToSPIRVBase::transOCLMetadata() {
   }
 
   for (auto &F : *M) {
-    if (F.getCallingConv() != CallingConv::FLOOR_KERNEL)
+    if (F.getCallingConv() != CallingConv::FLOOR_KERNEL &&
+        F.getCallingConv() != CallingConv::FLOOR_TASK &&
+        F.getCallingConv() != CallingConv::FLOOR_MESH)
       continue;
 
     SPIRVFunction *BF = static_cast<SPIRVFunction *>(getTranslatedValue(&F));
@@ -7552,28 +7933,7 @@ LLVMToSPIRVBase::transVulkanImageFunction(CallInst *CI, SPIRVBasicBlock *BB,
       const auto img_sampled_type =
           (SPIRVTypeInt *)spirv_img_type->getSampledType();
       const auto img_is_signed = img_sampled_type->isSigned();
-      if (data_arg->getType()->isTypeVector()) {
-        auto data_vec_type = (SPIRVTypeVector *)data_arg->getType();
-        assert(data_vec_type->getComponentType()->isTypeInt());
-        auto data_comp_type = (SPIRVTypeInt *)data_vec_type->getComponentType();
-        if (data_comp_type->isSigned() != img_is_signed) {
-          data_arg = BM->addUnaryInst(
-              spv::OpBitcast,
-              BM->addVectorType(img_is_signed ? data_comp_type->getSigned()
-                                              : data_comp_type->getUnsigned(),
-                                data_vec_type->getComponentCount()),
-              data_arg, BB);
-        }
-      } else { // -> scalar
-        auto data_scalar_type = (SPIRVTypeInt *)data_arg->getType();
-        if (data_scalar_type->isSigned() != img_is_signed) {
-          data_arg =
-              BM->addUnaryInst(spv::OpBitcast,
-                               img_is_signed ? data_scalar_type->getSigned()
-                                             : data_scalar_type->getUnsigned(),
-                               data_arg, BB);
-        }
-      }
+      data_arg = force_value_with_sign(data_arg, img_is_signed, BB, BM);
     }
     write_operands.emplace_back(data_arg->getId());
 

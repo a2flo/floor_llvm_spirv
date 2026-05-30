@@ -75,7 +75,8 @@ public:
   // a function, that is necessary for a convenient function pointers handling.
   // By default transValue uses 'Decl' mode, which means every function
   // we meet during the translation should result in its declaration generated.
-  // In 'Pointer' mode we generate OpConstFunctionPointerINTEL constant instead.
+  // In 'Pointer' mode we generate OpConstantFunctionPointerINTEL constant
+  // instead.
   enum class FuncTransMode { Decl, Pointer };
 
   SPIRVType *transType(Type *T);
@@ -215,8 +216,7 @@ private:
 
   SPIRVValue *transSpcvCast(CallInst *CI, SPIRVBasicBlock *BB);
   SPIRVValue *oclTransSpvcCastSampler(CallInst *CI, SPIRVBasicBlock *BB);
-  SPIRV::SPIRVInstruction *transUnaryInst(UnaryInstruction *U,
-                                          SPIRVBasicBlock *BB);
+  SPIRV::SPIRVValue *transUnaryInst(UnaryInstruction *U, SPIRVBasicBlock *BB);
 
   void transFunction(Function *I);
   SPIRV::SPIRVLinkageTypeKind transLinkageType(const GlobalValue *GV);
@@ -243,6 +243,8 @@ private:
     bool is_iub{false};
     bool is_ssbo_array{false};
     bool is_input{false};
+    bool is_task_payload{false};
+    bool is_arg_buffer{false};
     bool is_builtin{false};
     bool is_image{false};
     bool is_fbo_color{false};
@@ -250,8 +252,11 @@ private:
     bool is_read_only{false};
     bool is_write_only{false};
     bool is_flat{false};
+    bool is_mesh_output{false};
+    bool is_per_primitive{false};
     bool set_location{false};
     uint32_t location{0};
+    std::string *type_hint{nullptr};
   };
 
   //! cache for builtin variables (we only want to emit these once)
@@ -292,6 +297,35 @@ private:
   std::unordered_map<SPIRVType *, uint32_t> base_array_strides;
   // adds ArrayStride to type and registers it in "base_array_strides"
   void add_array_stride_decoration(SPIRVType *type, const uint32_t stride);
+
+  //! global mesh shading data
+  struct {
+    //! task/mesh: payload variable
+    SPIRVVariable *payload{nullptr};
+
+    //! mesh: max vertex/primitive counts
+    uint32_t max_vertex_count{~0u};
+    uint32_t max_primitive_count{~0u};
+
+    //! mesh: indices output variable
+    SPIRVVariable *indices{nullptr};
+    SPIRVType *indices_ptr_type{nullptr};
+    struct {
+      uint8_t is_point : 1u {false};
+      uint8_t is_line : 1u {false};
+      uint8_t is_triangle : 1u {false};
+      uint8_t unused : 5u {0u};
+    } index_info;
+
+    //! mesh: vertex/primitive output
+    //! NOTE: in fragment shaders this is handled as normal stage input
+    std::vector<SPIRVVariable *> vertex_data;
+    std::vector<SPIRVType *> vertex_data_ptr_types;
+    std::vector<bool> vertex_data_signedness;
+    std::vector<SPIRVVariable *> primitive_data;
+    std::vector<SPIRVType *> primitive_data_ptr_types;
+    std::vector<bool> primitive_data_signedness;
+  } mesh;
 };
 
 class LLVMToSPIRVPass : public PassInfoMixin<LLVMToSPIRVPass>,
