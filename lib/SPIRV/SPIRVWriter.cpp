@@ -6,7 +6,7 @@
 // License. See LICENSE.TXT for details.
 //
 // Copyright (c) 2014 Advanced Micro Devices, Inc. All rights reserved.
-// Copyright (c) 2016 - 2025 Florian Ziesche Vulkan/SPIR-V support
+// Copyright (c) 2016 - 2026 Florian Ziesche Vulkan/SPIR-V support
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
 // copy of this software and associated documentation files (the "Software"),
@@ -6746,13 +6746,16 @@ void LLVMToSPIRVBase::transFunction(Function *F) {
           const auto is_valid =
               is_builtin_valid_in_stage(builtin.first, stage, true /* input */);
           if (is_valid) {
-            llvm::Type *elem_type = arg_type->getPointerElementType();
-            global_type.is_input = true;
-            global_type.is_builtin = true;
-            auto [repl_var, _] = emitShaderGlobal(
-                *F, BF, arg_name.str(), elem_type, SPIRAS_Input, global_type,
-                md_info, builtin.first);
-            arg.replaceAllUsesWith(repl_var);
+            // only emit if this is actually used
+            if (!arg.users().empty() || !arg.uses().empty()) {
+              llvm::Type *elem_type = arg_type->getPointerElementType();
+              global_type.is_input = true;
+              global_type.is_builtin = true;
+              auto [repl_var, _] = emitShaderGlobal(
+                  *F, BF, arg_name.str(), elem_type, SPIRAS_Input, global_type,
+                  md_info, builtin.first);
+              arg.replaceAllUsesWith(repl_var);
+            }
           } else {
             // TODO: should catch this earlier
             if (arg.getNumUses() > 0) {
