@@ -156,9 +156,10 @@ static inline SPIRVValue *force_int_value(SPIRVValue *val, SPIRVBasicBlock *BB,
 }
 
 //! helper functions to force an integer or int-vector LLVM value to be an
-//! unsigned (!to_signed) or signed (to_signed) SPIR-V value NOTE: if
-//! "wanted_bitness" is != ~0u, this will also perform a cast to the wanted
-//! bitness NOTE: this also handles constant values
+//! unsigned (!to_signed) or signed (to_signed) SPIR-V value
+//! NOTE: if "wanted_bitness" is != ~0u, this will also perform a cast to the
+//! wanted bitness
+//! NOTE: this also handles constant values
 static inline SPIRVValue *
 force_value_with_sign(llvm::Value *val, const bool to_signed,
                       SPIRVBasicBlock *BB, SPIRVModule *BM,
@@ -4633,11 +4634,22 @@ SPIRVValue *LLVMToSPIRVBase::transDirectCallInst(CallInst *CI,
   if (MangledName.startswith("floor.")) {
     if (MangledName.startswith("floor.composite_construct.")) {
       std::vector<SPIRVWord> Constituents;
-      for (const auto &elem : CI->args()) {
-        Constituents.emplace_back(transValue(elem, BB)->getId());
+      const auto comp_type = transType(CI->getType());
+      bool int_sign_handling = false, is_signed = false;
+      if (comp_type->isTypeVectorInt()) {
+        int_sign_handling = true;
+        is_signed =
+            ((SPIRVTypeInt *)((SPIRVTypeVector *)comp_type)->getComponentType())
+                ->isSigned();
       }
-      return BM->addCompositeConstructInst(transType(CI->getType()),
-                                           Constituents, BB);
+      for (const auto &elem : CI->args()) {
+        const auto val =
+            (int_sign_handling
+                 ? force_value_with_sign(elem, is_signed, BB, BM, this)
+                 : transValue(elem, BB));
+        Constituents.emplace_back(val->getId());
+      }
+      return BM->addCompositeConstructInst(comp_type, Constituents, BB);
     } else if (MangledName == "floor.dfdx.f32" ||
                MangledName == "floor.dfdy.f32" ||
                MangledName == "floor.fwidth.f32") {
