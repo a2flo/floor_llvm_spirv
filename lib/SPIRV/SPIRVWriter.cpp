@@ -4469,12 +4469,21 @@ SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_op(StringRef MangledName,
 
   // extract op
   Op opcode = spv::OpNop;
+  bool may_need_sign_conversion = false;
   if (MangledName.consume_front("add.")) {
     opcode = spv::OpGroupNonUniformIAdd;
   } else if (MangledName.consume_front("min.")) {
     opcode = spv::OpGroupNonUniformSMin;
+    may_need_sign_conversion = true;
   } else if (MangledName.consume_front("max.")) {
     opcode = spv::OpGroupNonUniformSMax;
+    may_need_sign_conversion = true;
+  } else if (MangledName.consume_front("and.")) {
+    opcode = spv::OpGroupNonUniformBitwiseAnd;
+  } else if (MangledName.consume_front("or.")) {
+    opcode = spv::OpGroupNonUniformBitwiseOr;
+  } else if (MangledName.consume_front("xor.")) {
+    opcode = spv::OpGroupNonUniformBitwiseXor;
   } else {
     assert(false && "invalid sub-group op");
     return nullptr;
@@ -4508,7 +4517,7 @@ SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_op(StringRef MangledName,
       return nullptr;
     }
     // depending on the op, we may need to perform type conversion
-    if (opcode != spv::OpGroupNonUniformIAdd && !int_type->isSigned()) {
+    if (may_need_sign_conversion && !int_type->isSigned()) {
       auto signed_conv_type = int_type->getSigned();
       auto conv_type = (is_vector ? (SPIRVType *)BM->addVectorType(
                                         signed_conv_type,
@@ -4537,7 +4546,7 @@ SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_op(StringRef MangledName,
       return nullptr;
     }
     // depending on the op, we may need to perform type conversion
-    if (opcode != spv::OpGroupNonUniformIAdd && int_type->isSigned()) {
+    if (may_need_sign_conversion && int_type->isSigned()) {
       auto unsigned_conv_type = int_type->getUnsigned();
       auto conv_type = (is_vector ? (SPIRVType *)BM->addVectorType(
                                         unsigned_conv_type,
@@ -4550,6 +4559,9 @@ SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_op(StringRef MangledName,
 
     switch (opcode) {
     case spv::OpGroupNonUniformIAdd:
+    case spv::OpGroupNonUniformBitwiseAnd:
+    case spv::OpGroupNonUniformBitwiseOr:
+    case spv::OpGroupNonUniformBitwiseXor:
       // stays the same
       break;
     case spv::OpGroupNonUniformSMin:
@@ -4586,6 +4598,12 @@ SPIRVValue *LLVMToSPIRVBase::add_libfloor_sub_group_op(StringRef MangledName,
       break;
     case spv::OpGroupNonUniformSMax:
       opcode = spv::OpGroupNonUniformFMax;
+      break;
+    case spv::OpGroupNonUniformBitwiseAnd:
+    case spv::OpGroupNonUniformBitwiseOr:
+    case spv::OpGroupNonUniformBitwiseXor:
+      assert(false &&
+             "there is no floating point sub-group bitwise AND/OR/XOR");
       break;
     default:
       break;
