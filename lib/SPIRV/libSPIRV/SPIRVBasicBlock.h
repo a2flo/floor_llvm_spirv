@@ -84,6 +84,9 @@ public:
   SPIRVInstruction *
   addInstruction(SPIRVInstruction *I,
                  const SPIRVInstruction *InsertBefore = nullptr);
+  SPIRVInstruction *
+  addInstructionAfter(SPIRVInstruction *I,
+                      const SPIRVInstruction *InsertAfter = nullptr);
   void eraseInstruction(const SPIRVInstruction *I) {
     auto Loc = find(I);
     assert(Loc != InstVec.end());

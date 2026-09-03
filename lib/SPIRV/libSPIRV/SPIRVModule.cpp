@@ -235,7 +235,7 @@ public:
   void addEntryPoint(SPIRVExecutionModelKind ExecModel,
                      SPIRVId EntryPoint) override;
   void addEntryPointIO(SPIRVId EntryPoint, SPIRVVariable *var) override;
-  SPIRVForward *addForward(SPIRVType *Ty) override;
+  SPIRVForward *addForward(SPIRVType *Ty, SPIRVType *forced_type) override;
   SPIRVForward *addForward(SPIRVId, SPIRVType *Ty) override;
   SPIRVFunction *addFunction(SPIRVFunction *) override;
   SPIRVFunction *addFunction(SPIRVTypeFunction *, SPIRVId) override;
@@ -402,6 +402,9 @@ public:
   SPIRVInstruction *
   addInstruction(SPIRVInstruction *Inst, SPIRVBasicBlock *BB,
                  SPIRVInstruction *InsertBefore = nullptr) override;
+  SPIRVInstruction *
+  addInstructionAfter(SPIRVInstruction *Inst, SPIRVBasicBlock *BB,
+                      SPIRVInstruction *InsertAfter = nullptr) override;
   SPIRVInstTemplateBase *addInstTemplate(Op OC, SPIRVBasicBlock *BB,
                                          SPIRVType *Ty) override;
   SPIRVInstTemplateBase *addInstTemplate(Op OC,
@@ -471,6 +474,8 @@ public:
                                      SPIRVBasicBlock *BB) override;
   SPIRVInstruction *addUnaryInst(Op, SPIRVType *, SPIRVValue *,
                                  SPIRVBasicBlock *) override;
+  SPIRVInstruction *addUnaryInstAfter(Op, SPIRVType *, SPIRVValue *,
+                                      SPIRVInstruction *) override;
   SPIRVInstruction *addVariable(SPIRVType *, bool, SPIRVLinkageTypeKind,
                                 SPIRVValue *, const std::string &,
                                 SPIRVStorageClassKind,
@@ -1218,8 +1223,13 @@ void SPIRVModuleImpl::addEntryPointIO(SPIRVId EntryPoint, SPIRVVariable *var) {
   io_vars->push_back(var);
 }
 
-SPIRVForward *SPIRVModuleImpl::addForward(SPIRVType *Ty) {
-  return add(new SPIRVForward(this, Ty, getId()));
+SPIRVForward *SPIRVModuleImpl::addForward(SPIRVType *Ty,
+                                          SPIRVType *forced_type) {
+  auto fwd = new SPIRVForward(this, Ty, getId());
+  if (forced_type) {
+    fwd->set_forced_type(forced_type);
+  }
+  return add(fwd);
 }
 
 SPIRVForward *SPIRVModuleImpl::addForward(SPIRVId Id, SPIRVType *Ty) {
@@ -1625,6 +1635,19 @@ SPIRVModuleImpl::addInstruction(SPIRVInstruction *Inst, SPIRVBasicBlock *BB,
 }
 
 SPIRVInstruction *
+SPIRVModuleImpl::addInstructionAfter(SPIRVInstruction *Inst, SPIRVBasicBlock *BB,
+                                     SPIRVInstruction *InsertAfter) {
+  if (BB)
+    return BB->addInstructionAfter(Inst, InsertAfter);
+  if (Inst->getOpCode() != OpSpecConstantOp) {
+    SPIRVInstruction *Res = createSpecConstantOpInst(Inst);
+    delete Inst;
+    Inst = Res;
+  }
+  return static_cast<SPIRVInstruction *>(addConstant(Inst));
+}
+
+SPIRVInstruction *
 SPIRVModuleImpl::addLoadInst(SPIRVValue *Source,
                              const std::vector<SPIRVWord> &TheMemoryAccess,
                              SPIRVBasicBlock *BB) {
@@ -1749,6 +1772,17 @@ SPIRVInstruction *SPIRVModuleImpl::addUnaryInst(Op TheOpCode,
       SPIRVInstTemplateBase::create(TheOpCode, TheType, getId(),
                                     getVec(Op->getId()), BB, this),
       BB);
+}
+
+SPIRVInstruction *SPIRVModuleImpl::addUnaryInstAfter(Op TheOpCode,
+                                                     SPIRVType *TheType,
+                                                     SPIRVValue *Op,
+                                                     SPIRVInstruction *After) {
+  auto BB = After->getParent();
+  return addInstructionAfter(
+      SPIRVInstTemplateBase::create(TheOpCode, TheType, getId(),
+                                    getVec(Op->getId()), BB, this),
+      BB, After);
 }
 
 SPIRVInstruction *SPIRVModuleImpl::addVectorExtractDynamicInst(

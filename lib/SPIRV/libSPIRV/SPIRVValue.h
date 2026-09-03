@@ -455,8 +455,18 @@ public:
   _SPIRV_DEF_ENCDEC1(Id)
   friend class SPIRVFunction;
 
+  void set_forced_type(SPIRVType* forced_type_) {
+    forced_type = forced_type_;
+  }
+
+  SPIRVType* get_forced_type() const {
+    return forced_type;
+  }
+
 protected:
   void validate() const override {}
+
+  SPIRVType* forced_type { nullptr };
 };
 
 } // namespace SPIRV

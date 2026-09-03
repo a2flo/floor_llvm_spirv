@@ -79,6 +79,24 @@ SPIRVBasicBlock::addInstruction(SPIRVInstruction *I,
   return I;
 }
 
+/// Assume I contains valid Id.
+SPIRVInstruction *
+SPIRVBasicBlock::addInstructionAfter(SPIRVInstruction *I,
+                                     const SPIRVInstruction *InsertAfter) {
+  assert(I && "Invalid instruction");
+  assert(InsertAfter && "should have InsertAfter when calling this");
+  Module->add(I);
+  I->setParent(this);
+  if (InsertAfter) {
+    auto Pos = find(InsertAfter);
+    assert(Pos != InstVec.end());
+    ++Pos;
+    InstVec.insert(Pos, I);
+  } else
+    InstVec.push_back(I);
+  return I;
+}
+
 void SPIRVBasicBlock::encodeChildren(spv_ostream &O) const {
   O << SPIRVNL();
   for (size_t I = 0, E = InstVec.size(); I != E; ++I)

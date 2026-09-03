@@ -66,6 +66,21 @@ using namespace OCLUtil;
 
 namespace SPIRV {
 
+//! used in transValue to enable us to set a pre-defined/forced SPIR-V type when
+//! added a forward decl
+struct forward_decl_opts_t {
+  bool create_forward{true};
+  SPIRVType *force_forward_type{nullptr};
+
+  constexpr forward_decl_opts_t() noexcept {}
+  constexpr forward_decl_opts_t(bool create_forward_) noexcept
+      : create_forward(create_forward_) {}
+  constexpr forward_decl_opts_t(SPIRVType *force_forward_type_,
+                                bool create_forward_ = true) noexcept
+      : create_forward(create_forward_),
+        force_forward_type(force_forward_type_) {}
+};
+
 class LLVMToSPIRVBase {
 public:
   LLVMToSPIRVBase(SPIRVModule *SMod);
@@ -121,12 +136,12 @@ public:
   void transFPContract();
   SPIRVValue *transConstant(Value *V);
   SPIRVValue *transValue(Value *V, SPIRVBasicBlock *BB,
-                         bool CreateForward = true,
+                         forward_decl_opts_t forward_decl = {},
                          FuncTransMode FuncTrans = FuncTransMode::Decl);
   void transGlobalAnnotation(GlobalVariable *V);
   SPIRVValue *
   transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
-                              bool CreateForward = true,
+                              forward_decl_opts_t forward_decl = {},
                               FuncTransMode FuncTrans = FuncTransMode::Decl);
   void transGlobalIOPipeStorage(GlobalVariable *V, MDNode *IO);
 

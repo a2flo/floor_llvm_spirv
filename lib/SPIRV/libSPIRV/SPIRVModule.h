@@ -224,7 +224,8 @@ public:
   addGroupDecorateGeneric(SPIRVGroupDecorateGeneric *GDec) = 0;
   virtual void addEntryPoint(SPIRVExecutionModelKind, SPIRVId) = 0;
   virtual void addEntryPointIO(SPIRVId EntryPoint, SPIRVVariable *var) = 0;
-  virtual SPIRVForward *addForward(SPIRVType *Ty) = 0;
+  virtual SPIRVForward *addForward(SPIRVType *Ty,
+                                   SPIRVType *forced_type = nullptr) = 0;
   virtual SPIRVForward *addForward(SPIRVId, SPIRVType *Ty) = 0;
   virtual SPIRVFunction *addFunction(SPIRVFunction *) = 0;
   virtual SPIRVFunction *addFunction(SPIRVTypeFunction *,
@@ -400,6 +401,9 @@ public:
   virtual SPIRVInstruction *
   addInstruction(SPIRVInstruction *Inst, SPIRVBasicBlock *BB,
                  SPIRVInstruction *InsertBefore = nullptr) = 0;
+  virtual SPIRVInstruction *
+  addInstructionAfter(SPIRVInstruction *Inst, SPIRVBasicBlock *BB,
+                      SPIRVInstruction *InsertAfter = nullptr) = 0;
   virtual SPIRVInstTemplateBase *addInstTemplate(Op OC, SPIRVBasicBlock *BB,
                                                  SPIRVType *Ty) = 0;
   virtual SPIRVInstTemplateBase *
@@ -474,6 +478,8 @@ public:
                                              SPIRVBasicBlock *BB) = 0;
   virtual SPIRVInstruction *addUnaryInst(Op, SPIRVType *, SPIRVValue *,
                                          SPIRVBasicBlock *) = 0;
+  virtual SPIRVInstruction *addUnaryInstAfter(Op, SPIRVType *, SPIRVValue *,
+                                              SPIRVInstruction *) = 0;
   virtual SPIRVInstruction *addVariable(SPIRVType *, bool, SPIRVLinkageTypeKind,
                                         SPIRVValue *, const std::string &,
                                         SPIRVStorageClassKind,

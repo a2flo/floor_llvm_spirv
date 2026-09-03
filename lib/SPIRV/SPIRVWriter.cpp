@@ -104,55 +104,77 @@ using namespace OCLUtil;
 
 namespace SPIRV {
 
+//! returns true if the specified signed integer or integer-vector type is
+//! signed
+static inline bool is_int_type_signed(SPIRVType *type) {
+  assert(type->isTypeVectorOrScalarInt());
+  if (type->isTypeVectorInt()) {
+    return ((SPIRVTypeInt *)((SPIRVTypeVector *)type)->getComponentType())
+        ->isSigned();
+  }
+  return ((SPIRVTypeInt *)type)->isSigned();
+}
+
+//! returns the corresponding signed/unsigned integer or integer-vector type for
+//! the specified integer/integer-vector type
+static SPIRVType *get_int_type_with_sign(SPIRVType *type, const bool to_signed,
+                                         SPIRVModule *BM) {
+  assert(type->isTypeVectorOrScalarInt());
+  if (is_int_type_signed(type) == to_signed) {
+    return type; // nop
+  }
+
+  if (type->isTypeVectorInt()) {
+    const auto vec_type = (SPIRVTypeVector *)type;
+    const auto comp_type = (SPIRVTypeInt *)vec_type->getComponentType();
+    return BM->addVectorType(to_signed ? comp_type->getSigned()
+                                       : comp_type->getUnsigned(),
+                             vec_type->getComponentCount());
+  }
+
+  const auto int_type = ((SPIRVTypeInt *)type);
+  return to_signed ? int_type->getSigned() : int_type->getUnsigned();
+}
+
 //! helper functions to force an integer or int-vector value to be unsigned
 //! (!to_signed) or signed (to_signed)
-static inline SPIRVValue *force_value_with_sign(SPIRVValue *val,
-                                                const bool to_signed,
-                                                SPIRVBasicBlock *BB,
-                                                SPIRVModule *BM) {
+static inline SPIRVValue *
+force_value_with_sign(SPIRVValue *val, const bool to_signed,
+                      SPIRVBasicBlock *BB, SPIRVModule *BM,
+                      SPIRVInstruction *InsertAfter = nullptr) {
+  assert(BB || InsertAfter);
+
   auto type = val->getType();
   if (!type->isTypeVectorOrScalarInt()) {
     assert(false && "expected an integer or int-vector type");
     return val;
   }
 
-  if (type->isTypeInt()) { // scalar
-    const auto int_type = ((SPIRVTypeInt *)type);
-    const auto is_signed = int_type->isSigned();
-    if (is_signed != to_signed) {
-      // bitcast to wanted signedness
-      return BM->addUnaryInst(
-          spv::OpBitcast,
-          to_signed ? int_type->getSigned() : int_type->getUnsigned(), val, BB);
-    }
-  } else { // vector
-    const auto vec_type = (SPIRVTypeVector *)type;
-    const auto comp_type = (SPIRVTypeInt *)vec_type->getComponentType();
-    const auto is_signed = comp_type->isSigned();
-    if (is_signed != to_signed) {
-      // bitcast to wanted signedness
-      return BM->addUnaryInst(spv::OpBitcast,
-                              BM->addVectorType(to_signed
-                                                    ? comp_type->getSigned()
-                                                    : comp_type->getUnsigned(),
-                                                vec_type->getComponentCount()),
-                              val, BB);
-    }
+  const auto src_type = val->getType();
+  const auto dst_type = get_int_type_with_sign(src_type, to_signed, BM);
+  if (src_type == dst_type) {
+    // already the correct sign
+    return val;
   }
-  // otherwise: already the correct sign
-  return val;
+
+  if (InsertAfter) {
+    return BM->addUnaryInstAfter(spv::OpBitcast, dst_type, val, InsertAfter);
+  }
+  return BM->addUnaryInst(spv::OpBitcast, dst_type, val, BB);
 }
 
 //! helper functions to force an integer or int-vector value to be unsigned
-static inline SPIRVValue *force_uint_value(SPIRVValue *val, SPIRVBasicBlock *BB,
-                                           SPIRVModule *BM) {
-  return force_value_with_sign(val, false, BB, BM);
+static inline SPIRVValue *
+force_uint_value(SPIRVValue *val, SPIRVBasicBlock *BB, SPIRVModule *BM,
+                 SPIRVInstruction *InsertAfter = nullptr) {
+  return force_value_with_sign(val, false, BB, BM, InsertAfter);
 }
 
 //! helper functions to force an integer or int-vector value to be signed
-static inline SPIRVValue *force_int_value(SPIRVValue *val, SPIRVBasicBlock *BB,
-                                          SPIRVModule *BM) {
-  return force_value_with_sign(val, true, BB, BM);
+static inline SPIRVValue *
+force_int_value(SPIRVValue *val, SPIRVBasicBlock *BB, SPIRVModule *BM,
+                SPIRVInstruction *InsertAfter = nullptr) {
+  return force_value_with_sign(val, true, BB, BM, InsertAfter);
 }
 
 //! helper functions to force an integer or int-vector LLVM value to be an
@@ -1243,10 +1265,11 @@ SPIRVValue *LLVMToSPIRVBase::transConstant(Value *V) {
 }
 
 SPIRVValue *LLVMToSPIRVBase::transValue(Value *V, SPIRVBasicBlock *BB,
-                                        bool CreateForward,
+                                        forward_decl_opts_t forward_decl,
                                         FuncTransMode FuncTrans) {
   LLVMToSPIRVValueMap::iterator Loc = ValueMap.find(V);
-  if (Loc != ValueMap.end() && (!Loc->second->isForward() || CreateForward) &&
+  if (Loc != ValueMap.end() &&
+      (!Loc->second->isForward() || forward_decl.create_forward) &&
       // do not return forward-decl of a function if we
       // actually want to create a function pointer
       !(FuncTrans == FuncTransMode::Pointer && isa<Function>(V)))
@@ -1257,7 +1280,7 @@ SPIRVValue *LLVMToSPIRVBase::transValue(Value *V, SPIRVBasicBlock *BB,
           isa<CastInst>(V) || BB) &&
          "Invalid SPIRV BB");
 
-  auto BV = transValueWithoutDecoration(V, BB, CreateForward, FuncTrans);
+  auto BV = transValueWithoutDecoration(V, BB, forward_decl, FuncTrans);
   if (!BV || !transDecoration(V, BV))
     return nullptr;
   StringRef Name = V->getName();
@@ -1912,10 +1935,10 @@ std::vector<SPIRVValue *> LLVMToSPIRVBase::translate_indices(
 /// An instruction may use an instruction from another BB which has not been
 /// translated. SPIRVForward should be created as place holder for these
 /// instructions and replaced later by the real instructions.
-/// Use CreateForward = true to indicate such situation.
+/// Use forward_decl.create_forward = true to indicate such situation.
 SPIRVValue *
 LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
-                                             bool CreateForward,
+                                             forward_decl_opts_t forward_decl,
                                              FuncTransMode FuncTrans) {
   if (auto LBB = dyn_cast<BasicBlock>(V)) {
     auto BF =
@@ -2127,8 +2150,13 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
     return mapValue(V, BF->getArgument(ArgNo));
   }
 
-  if (CreateForward)
-    return mapValue(V, BM->addForward(transType(V->getType())));
+  if (forward_decl.create_forward) {
+    auto fwd_type =
+        (forward_decl.force_forward_type ? forward_decl.force_forward_type
+                                         : transType(V->getType()));
+    return mapValue(V,
+                    BM->addForward(fwd_type, forward_decl.force_forward_type));
+  }
 
   if (StoreInst *ST = dyn_cast<StoreInst>(V)) {
     // don't translate stores to nullptr or poison value stores
@@ -2512,13 +2540,31 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
     }
 
     std::vector<SPIRVValue *> IncomingPairs;
+    SPIRVType *first_value_type = nullptr;
     // add all non-const pairs first, or everything if we have no common
     // non-const type
     for (auto &incoming : incoming_llvm_pairs) {
       if (!common_non_const_type ||
           dyn_cast_or_null<Constant>(incoming.first) == nullptr) {
-        IncomingPairs.push_back(
-            transValue(incoming.first, BB, true, FuncTransMode::Pointer));
+        // if this creates a forward decl, we need to ensure that a) the forward
+        // decl itself retains the same type as we determined here, and b) that
+        // the actual decl will have the same type or be bitcasted to it later
+        auto val = transValue(incoming.first, BB,
+                              {first_value_type /* may be nullptr */, true},
+                              FuncTransMode::Pointer);
+        if (!first_value_type) {
+          first_value_type = val->getType();
+        }
+        // take care of integer type mismatches of dynamic values
+        else if (val->getType() != first_value_type) {
+          // note that we already error on all other type mismatches
+          assert(first_value_type->isTypeVectorOrScalarInt());
+          assert(val->getType()->isTypeVectorOrScalarInt());
+          val = force_value_with_sign(val, is_int_type_signed(first_value_type),
+                                      nullptr, BM, (SPIRVInstruction *)val);
+        }
+        IncomingPairs.push_back(val);
+
         IncomingPairs.push_back(transValue(incoming.second, nullptr));
         continue;
       }
@@ -2861,6 +2907,20 @@ SPIRVValue *LLVMToSPIRVBase::mapValue(const Value *V, SPIRVValue *BV) {
     assert(Loc->second->isForward() &&
            "LLVM Value is mapped to different SPIRV Values");
     auto Forward = static_cast<SPIRVForward *>(Loc->second);
+
+    // if the forward decl was created with a forced type,
+    // handle integer sign mismatch between forward and actual decl,
+    // otherwise assume the type of the actual decl is correct
+    if (Forward->getType() != BV->getType()) {
+      // both must be integer types, otherwise this is invalid
+      assert(Forward->getType()->isTypeVectorOrScalarInt());
+      assert(BV->getType()->isTypeVectorOrScalarInt());
+      if (auto forced_type = Forward->get_forced_type(); forced_type) {
+        BV = force_value_with_sign(BV, is_int_type_signed(forced_type), nullptr,
+                                   BV->getModule(), (SPIRVInstruction *)BV);
+      }
+    }
+
     BM->replaceForward(Forward, BV);
   }
   ValueMap[V] = BV;
